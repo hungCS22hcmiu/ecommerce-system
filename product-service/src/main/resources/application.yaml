@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: product-service
+  main:
+    # Defer all bean creation (DataSource, Flyway, Redis) until first use.
+    # Remove this once the database is available in docker-compose.
+    lazy-initialization: true
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/ecommerce_products
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      connection-timeout: 30000
+      leak-detection-threshold: 60000
+  jpa:
+    hibernate:
+      # Use 'validate' once DB is running; 'none' lets service start without a database.
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          "[batch_size]": 50
+        "[order_inserts]": true
+        "[order_updates]": true
+  flyway:
+    # Enable once the database is running in docker-compose (Week 3+).
+    enabled: false
+    locations: classpath:db/migration
+  cache:
+    type: redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+server:
+  port: 8081
