@@ -1,0 +1,858 @@
+openapi: 3.0.3
+
+info:
+  title: High-Throughput E-Commerce Platform API
+  description: |
+    REST API for a distributed e-commerce platform built with 5 microservices
+    (User, Product, Cart, Order, Payment). All requests route through Nginx
+    reverse proxy at port 80.
+
+    **Authentication:** Bearer JWT (RS256, 15-min TTL).
+    Obtain tokens via `POST /api/v1/auth/login`.
+  version: 1.0.0
+  contact:
+    name: Hung
+    url: https://github.com/hungCS22hcmiu/ecommrece-system
+
+servers:
+  - url: http://localhost/api/v1
+    description: Local Docker Compose (via Nginx)
+
+# ─────────────────────────────────────────────
+# Security Scheme
+# ─────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        RS256-signed JWT. Include in header:
+        `Authorization: Bearer <access_token>`
+
+  # ─── Reusable Schemas ───────────────────────
+  schemas:
+
+    # ── Generic envelope ──────────────────────
+    SuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          description: Response payload (varies per endpoint)
+
+    PaginatedResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items: {}
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          example: 150
+        totalPages:
+          type: integer
+          example: 8
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required: [code, message, timestamp, path]
+          properties:
+            code:
+              type: string
+              example: INVALID_CREDENTIALS
+            message:
+              type: string
+              example: Invalid email or password
+            timestamp:
+              type: string
+              format: date-time
+            path:
+              type: string
+              example: /api/v1/auth/login
+            details:
+              type: object
+              additionalProperties: true
+
+    ValidationErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Request validation failed
+            timestamp:
+              type: string
+              format: date-time
+            path:
+              type: string
+            details:
+              type: object
+              description: Field-level validation errors
+              additionalProperties:
+                type: string
+              example:
+                email: must be a valid email address
+                password: must be at least 12 characters
+
+    # ── User schemas ───────────────────────────
+    RegisterRequest:
+      type: object
+      required: [email, password, firstName, lastName]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          example: jane.doe@example.com
+        password:
+          type: string
+          minLength: 12
+          maxLength: 72        # bcrypt max input length
+          description: |
+            Must contain at least 1 uppercase letter, 1 digit,
+            and 1 special character (!@#$%^&*).
+          example: SecurePass123!
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Jane
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Doe
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: jane.doe@example.com
+        password:
+          type: string
+          example: SecurePass123!
+
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          description: Opaque refresh token returned on login
+          example: a3f9b2e1d8c7...
+
+    AuthTokensResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: RS256 JWT, 15-minute TTL
+          example: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+        refreshToken:
+          type: string
+          description: Opaque token, 7-day TTL
+          example: a3f9b2e1d8c7...
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Access token TTL in seconds
+          example: 900
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        email:
+          type: string
+          format: email
+          example: jane.doe@example.com
+        role:
+          type: string
+          enum: [ADMIN, SELLER, CUSTOMER]
+          example: CUSTOMER
+        profile:
+          $ref: '#/components/schemas/ProfileDetails'
+        addresses:
+          type: array
+          items:
+            $ref: '#/components/schemas/Address'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ProfileDetails:
+      type: object
+      properties:
+        firstName:
+          type: string
+          example: Jane
+        lastName:
+          type: string
+          example: Doe
+        phone:
+          type: string
+          example: "+84901234567"
+        avatarUrl:
+          type: string
+          format: uri
+          example: https://cdn.example.com/avatars/jane.png
+
+    UpdateProfileRequest:
+      type: object
+      description: All fields optional — only provided fields are updated (PATCH semantics)
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Jane
+        lastName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Smith
+        phone:
+          type: string
+          maxLength: 20
+          example: "+84901234567"
+
+    Address:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        street:
+          type: string
+          example: 123 Nguyen Hue Street
+        city:
+          type: string
+          example: Ho Chi Minh City
+        state:
+          type: string
+          example: HCM
+        zip:
+          type: string
+          example: "70000"
+        country:
+          type: string
+          example: Vietnam
+        isDefault:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateAddressRequest:
+      type: object
+      required: [street, city, zip, country]
+      properties:
+        street:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: 123 Nguyen Hue Street
+        city:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Ho Chi Minh City
+        state:
+          type: string
+          maxLength: 100
+          example: HCM
+        zip:
+          type: string
+          minLength: 1
+          maxLength: 20
+          example: "70000"
+        country:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Vietnam
+        isDefault:
+          type: boolean
+          default: false
+
+  # ─── Reusable Responses ───────────────────────
+  responses:
+    Unauthorized:
+      description: Missing, invalid, or expired JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: UNAUTHORIZED
+              message: JWT is missing or invalid
+              timestamp: "2026-03-02T10:00:00Z"
+              path: /api/v1/users/profile
+
+    Forbidden:
+      description: Valid JWT but insufficient role/permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    TooManyRequests:
+      description: Rate limit exceeded (100 req/min per IP via Nginx)
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until limit resets
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ValidationError:
+      description: Request body failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+# ─────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────
+tags:
+  - name: Auth
+    description: Registration, login, token management
+  - name: Users
+    description: User profile and address management
+
+paths:
+
+  # ════════════════════════════════════════════
+  # AUTH ENDPOINTS
+  # ════════════════════════════════════════════
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: registerUser
+      summary: Register a new user account
+      description: |
+        Creates a new CUSTOMER account. Password is hashed with bcrypt
+        (cost factor 12) before storage. Returns the new user's ID — no
+        tokens are issued on registration; call `/auth/login` to authenticate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              email: jane.doe@example.com
+              password: SecurePass123!
+              firstName: Jane
+              lastName: Doe
+      responses:
+        "201":
+          description: Account created successfully
+          headers:
+            Location:
+              description: URL of the new user profile
+              schema:
+                type: string
+                example: /api/v1/users/550e8400-e29b-41d4-a716-446655440000
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                success: true
+                data:
+                  id: 550e8400-e29b-41d4-a716-446655440000
+                  email: jane.doe@example.com
+                  role: CUSTOMER
+                  createdAt: "2026-03-02T10:00:00Z"
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "409":
+          description: Email address already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: DUPLICATE_EMAIL
+                  message: An account with this email already exists
+                  timestamp: "2026-03-02T10:00:00Z"
+                  path: /api/v1/auth/register
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: loginUser
+      summary: Authenticate and receive JWT tokens
+      description: |
+        Validates email + password, returns a short-lived access token (15 min,
+        RS256 JWT) and a long-lived refresh token (7 days, opaque).
+
+        **Account lockout:** After 5 consecutive failures the account is locked
+        for 15 minutes. The attempt counter is reset on successful login.
+
+        **Race-condition safety:** The user row is locked with `SELECT FOR UPDATE`
+        during login to prevent concurrent attempts from bypassing the lockout.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: jane.doe@example.com
+              password: SecurePass123!
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthTokensResponse'
+              example:
+                success: true
+                data:
+                  accessToken: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+                  refreshToken: a3f9b2e1d8c7...
+                  tokenType: Bearer
+                  expiresIn: 900
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: Invalid email or password
+                  timestamp: "2026-03-02T10:00:00Z"
+                  path: /api/v1/auth/login
+        "403":
+          description: Account is locked due to excessive failed login attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: ACCOUNT_LOCKED
+                  message: Account locked after 5 failed attempts. Try again in 15 minutes.
+                  timestamp: "2026-03-02T10:00:00Z"
+                  path: /api/v1/auth/login
+        "429":
+          $ref: '#/components/responses/TooManyRequests'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Issue new access token from refresh token
+      description: |
+        Validates the refresh token (checks hash in DB, verifies not revoked,
+        verifies not expired). Returns a new access token. The refresh token
+        itself is **not** rotated — it remains valid until its 7-day TTL expires
+        or until logout is called.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        "200":
+          description: New access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                success: true
+                data:
+                  accessToken: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+                  tokenType: Bearer
+                  expiresIn: 900
+        "401":
+          description: Refresh token is invalid, expired, or revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: INVALID_REFRESH_TOKEN
+                  message: Refresh token is invalid or has expired
+                  timestamp: "2026-03-02T10:00:00Z"
+                  path: /api/v1/auth/refresh
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logoutUser
+      summary: Revoke access and refresh tokens
+      description: |
+        Adds the access token's `jti` to the Redis blacklist (TTL = remaining
+        token lifetime) and marks the refresh token as revoked in the database.
+        Also deletes the user's session cache from Redis.
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Logged out successfully (no response body)
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  # ════════════════════════════════════════════
+  # USER ENDPOINTS
+  # ════════════════════════════════════════════
+
+  /users/profile:
+    get:
+      tags: [Users]
+      operationId: getMyProfile
+      summary: Get current user's profile
+      description: |
+        Returns the authenticated user's full profile including all addresses.
+        Result is served from Redis session cache (`session:{userId}`, 30-min TTL)
+        on cache hit; falls through to PostgreSQL on miss and repopulates the cache.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+    put:
+      tags: [Users]
+      operationId: updateMyProfile
+      summary: Update current user's profile
+      description: |
+        Updates firstName, lastName, and/or phone. Write-through cache strategy:
+        updates both PostgreSQL and the Redis session cache atomically to keep
+        them consistent.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+            example:
+              firstName: Jane
+              lastName: Smith
+              phone: "+84901234567"
+      responses:
+        "200":
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /users/addresses:
+    post:
+      tags: [Users]
+      operationId: addAddress
+      summary: Add a new shipping address
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAddressRequest'
+      responses:
+        "201":
+          description: Address added successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Address'
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /users/addresses/{addressId}:
+    parameters:
+      - name: addressId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: UUID of the address to operate on
+
+    put:
+      tags: [Users]
+      operationId: updateAddress
+      summary: Update an existing address
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAddressRequest'
+      responses:
+        "200":
+          description: Address updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Address'
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Address does not belong to current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+    delete:
+      tags: [Users]
+      operationId: deleteAddress
+      summary: Remove an address
+      security:
+        - BearerAuth: []
+      responses:
+        "204":
+          description: Address deleted successfully
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Address does not belong to current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /users/addresses/{addressId}/default:
+    parameters:
+      - name: addressId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    put:
+      tags: [Users]
+      operationId: setDefaultAddress
+      summary: Set an address as the default shipping address
+      description: |
+        Clears `is_default` on all other addresses for this user, then sets
+        `is_default = true` on the specified address. Both operations are
+        performed in a single transaction.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Default address updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Address'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Address does not belong to current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: UUID of the user
+
+    get:
+      tags: [Users]
+      operationId: getUserById
+      summary: "[Internal] Get user by ID"
+      description: |
+        **Service-to-service endpoint only.** Not exposed through Nginx to
+        external clients. Used by Order Service to resolve user details.
+        Requires an internal `X-Service-Token` header (not a user JWT).
+      parameters:
+        - name: X-Service-Token
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Shared secret for inter-service authentication
+      responses:
+        "200":
+          description: User found
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
