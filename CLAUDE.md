@@ -72,7 +72,31 @@ Go service internal layout:
 - `config/config.go` — env-based configuration
 - `internal/handler/` — HTTP handlers (Gin)
 - `internal/middleware/` — recovery + structured logger middleware
-- `pkg/response/` — shared response envelope helpers
+- `internal/model/` — GORM models
+- `internal/repository/` — DB access layer (interface + GORM impl)
+- `internal/service/` — business logic (depends only on repository interface)
+- `internal/dto/` — request/response structs with `validate:"..."` tags
+- `pkg/response/` — shared response envelope helpers (`Success`, `Created`, `Error`, `BadRequest`, `Conflict`, `InternalError`, etc.)
+- `pkg/password/` — bcrypt helpers: `Hash(plain) → hash`, `Compare(hash, plain) → bool`
+- `pkg/jwt/` — JWT helpers (RS256, planned Day 8)
+- `api.txt` — curl-based API testing reference for the service
+
+### Go Service Patterns
+
+**Dependency wiring** (always in `main.go`):
+```
+db → repository → service → handler → router
+```
+Services depend only on repository *interfaces*, never on `*gorm.DB` directly — keeps them unit-testable with `testify/mock`.
+
+**Context propagation**: every handler extracts `c.Request.Context()` and passes it through service → repository → `db.WithContext(ctx)`.
+
+**AutoMigrate**: called in `main.go` at startup; drops and recreates tables cleanly in dev if schema drifts.
+
+**Validation**: `github.com/go-playground/validator/v10` on DTOs; errors mapped to field→tag map in `VALIDATION_ERROR` response.
+
+**Testing stack**: `github.com/stretchr/testify` (assert/require/mock). Run with `-race` flag always.
+Coverage targets: 70%+ on service layer, 100% on auth handler.
 
 ## Java Services (product-service, order-service)
 
@@ -151,4 +175,30 @@ All responses use a consistent shape (defined in `api/openapi.yaml`):
 - `api/openapi.yaml` — full REST API contract
 - `docs/adr/locking-strategy.md` — detailed rationale for per-service concurrency decisions
 - `docs/adr/proposal.md` — full technical proposal with architecture decisions
+- `docs/adr/timeline.md` — 10-week day-by-day implementation plan
 - `.env.example` — all required environment variables with descriptions
+- `<service>/api.txt` — curl-based API testing reference per service
+
+## Implementation Progress
+
+### user-service (Day 7 complete)
+Implemented:
+- `internal/model/` — `User`, `UserProfile`, `UserAddress` (GORM + UUID PKs)
+- `pkg/password/` — bcrypt cost 12
+- `internal/dto/register_request.go` + `UserResponse`
+- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`
+- `internal/service/auth_service.go` — `Register` with duplicate check + transaction
+- `internal/handler/auth_handler.go` — `POST /api/v1/auth/register`
+- Unit tests: `pkg/password`, `internal/service`, `internal/handler` — race-detector clean
+
+Active endpoints:
+- `GET  /health/live`
+- `GET  /health/ready`
+- `POST /api/v1/auth/register`
+
+Stale-table note: if AutoMigrate fails with "constraint does not exist", drop the tables in psql and restart:
+```bash
+docker exec ecommerce-postgres psql -U postgres -d ecommerce_users \
+  -c "DROP TABLE IF EXISTS user_addresses, user_profiles, users CASCADE;"
+docker compose restart user-service
+```

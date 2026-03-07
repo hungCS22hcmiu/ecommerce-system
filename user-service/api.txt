@@ -1,0 +1,124 @@
+User Service API — Testing Reference
+=====================================
+Base URL: http://localhost:8001
+
+
+─── HEALTH ──────────────────────────────────────────────────────────────────
+
+GET /health/live
+  Liveness probe — always 200 if process is up.
+
+  curl http://localhost:8001/health/live
+
+  Response 200:
+    {"status":"UP","timestamp":"..."}
+
+
+GET /health/ready
+  Readiness probe — checks Postgres + Redis connectivity.
+
+  curl http://localhost:8001/health/ready
+
+  Response 200 (all up):
+    {"status":"UP","checks":{"postgres":"UP","redis":"UP"},"timestamp":"..."}
+
+  Response 503 (dependency down):
+    {"status":"DOWN","checks":{"postgres":"UP","redis":"DOWN"},"timestamp":"..."}
+
+
+─── AUTH ─────────────────────────────────────────────────────────────────────
+
+POST /api/v1/auth/register
+  Register a new user. Creates user + profile in one atomic GORM transaction.
+
+  Validation rules:
+    email      — required, valid email format, max 255 chars
+    password   — required, min 8 chars, max 72 chars (bcrypt limit)
+    first_name — required, min 1 char, max 100 chars
+    last_name  — required, min 1 char, max 100 chars
+
+  --- Success (201) ---
+  curl -X POST http://localhost:8001/api/v1/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com","password":"password123","first_name":"Alice","last_name":"Smith"}'
+
+  Response 201:
+    {
+      "success": true,
+      "data": {
+        "id": "<uuid>",
+        "email": "alice@example.com",
+        "role": "customer",
+        "first_name": "Alice",
+        "last_name": "Smith"
+      }
+    }
+
+  --- Duplicate email (409) ---
+  curl -X POST http://localhost:8001/api/v1/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com","password":"password123","first_name":"Alice","last_name":"Smith"}'
+
+  Response 409:
+    {
+      "success": false,
+      "error": {"code":"DUPLICATE_EMAIL","message":"email already registered","timestamp":"...","path":"..."}
+    }
+
+  --- Validation failure (400) ---
+  curl -X POST http://localhost:8001/api/v1/auth/register \
+    -H "Content-Type: application/json" \
+    -d '{"email":"not-an-email","password":"short"}'
+
+  Response 400:
+    {
+      "success": false,
+      "error": {
+        "code": "VALIDATION_ERROR",
+        "message": "validation failed",
+        "timestamp": "...",
+        "path": "...",
+        "details": {"Email":"email","Password":"min","FirstName":"required","LastName":"required"}
+      }
+    }
+
+  --- Malformed JSON (400) ---
+  curl -X POST http://localhost:8001/api/v1/auth/register \
+    -H "Content-Type: application/json" \
+    -d 'not-json'
+
+  Response 400:
+    {
+      "success": false,
+      "error": {"code":"INVALID_BODY","message":"request body is not valid JSON","timestamp":"...","path":"..."}
+    }
+
+
+─── NOTES ────────────────────────────────────────────────────────────────────
+
+Envelope shape:
+  Success  → {"success": true,  "data": {...}}
+  Paginated→ {"success": true,  "data": [...], "meta": {"page":0,"size":20,"totalElements":N,"totalPages":N}}
+  Error    → {"success": false, "error": {"code":"...","message":"...","timestamp":"...","path":"...","details":{...}}}
+
+Error codes:
+  INVALID_BODY      — request body is not valid JSON
+  VALIDATION_ERROR  — one or more fields failed validation (details map has field→tag)
+  DUPLICATE_EMAIL   — email already registered (409)
+  UNAUTHORIZED      — missing or invalid JWT (401)
+  INTERNAL_ERROR    — unexpected server error (500)
+
+Password storage:
+  Passwords are hashed with bcrypt cost 12 ($2a$12$...) and never returned in responses.
+
+Planned endpoints (Days 8–10):
+  POST /api/v1/auth/login
+  POST /api/v1/auth/refresh
+  POST /api/v1/auth/logout
+  GET  /api/v1/users/profile
+  PUT  /api/v1/users/profile
+  POST /api/v1/users/addresses
+  PUT  /api/v1/users/addresses/:id
+  DELETE /api/v1/users/addresses/:id
+  PUT  /api/v1/users/addresses/:id/default
+  GET  /api/v1/users/:id   (internal, no auth)
