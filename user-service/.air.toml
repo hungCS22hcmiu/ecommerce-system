@@ -1,0 +1,24 @@
+# air configuration
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ./cmd/server/main.go"
+  bin = "./tmp/main"
+  entrypoint = "./tmp/main"
+  delay = 1000
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "keys"]
+  include_ext = ["go"]
+  exclude_regex = ["_test.go"]
+  stop_on_error = false
+  log = "build-errors.log"
+
+[log]
+  time = true
+
+[color]
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true
