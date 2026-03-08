@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/dto"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
@@ -16,7 +17,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
 )
 
-// ─── Mock repository ─────────────────────────────────────────────────────────
+// ─── Mock user repository ─────────────────────────────────────────────────────
 
 type mockUserRepo struct {
 	mock.Mock
@@ -43,6 +44,19 @@ func (m *mockUserRepo) FindByID(ctx context.Context, id uuid.UUID) (*model.User,
 	return args.Get(0).(*model.User), args.Error(1)
 }
 
+func (m *mockUserRepo) FindByEmailForUpdate(ctx context.Context, tx *gorm.DB, email string) (*model.User, error) {
+	args := m.Called(ctx, tx, email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.User), args.Error(1)
+}
+
+func (m *mockUserRepo) UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, userID uuid.UUID, attempts int, isLocked bool) error {
+	args := m.Called(ctx, tx, userID, attempts, isLocked)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func validRegisterRequest() dto.RegisterRequest {
@@ -54,7 +68,7 @@ func validRegisterRequest() dto.RegisterRequest {
 	}
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ─── Register tests ───────────────────────────────────────────────────────────
 
 func TestRegister_Success(t *testing.T) {
 	repo := new(mockUserRepo)

@@ -37,12 +37,30 @@ func (m *mockAuthService) Register(ctx context.Context, req dto.RegisterRequest)
 	return args.Get(0).(*model.User), args.Error(1)
 }
 
+func (m *mockAuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.LoginResponse, error) {
+	args := m.Called(ctx, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*dto.LoginResponse), args.Error(1)
+}
+
+func (m *mockAuthService) Refresh(ctx context.Context, refreshToken string) (*dto.LoginResponse, error) {
+	args := m.Called(ctx, refreshToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*dto.LoginResponse), args.Error(1)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func newRouter(svc service.AuthService) *gin.Engine {
 	r := gin.New()
 	h := handler.NewAuthHandler(svc)
 	r.POST("/api/v1/auth/register", h.Register)
+	r.POST("/api/v1/auth/login", h.Login)
+	r.POST("/api/v1/auth/refresh", h.Refresh)
 	return r
 }
 
@@ -62,7 +80,7 @@ func parseBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	return result
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ─── Register tests ───────────────────────────────────────────────────────────
 
 func TestRegisterHandler_Success_Returns201(t *testing.T) {
 	svc := new(mockAuthService)
@@ -175,4 +193,109 @@ func TestRegisterHandler_ServiceError_Returns500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	body := parseBody(t, w)
 	assert.Equal(t, false, body["success"])
+}
+
+// ─── Login tests ──────────────────────────────────────────────────────────────
+
+func TestLoginHandler_Success_Returns200(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	req := dto.LoginRequest{Email: "john@example.com", Password: "secret123"}
+	loginResp := &dto.LoginResponse{
+		AccessToken:  "access.token.here",
+		RefreshToken: "refresh-token-hex",
+		User:         dto.UserResponse{ID: "uuid-1", Email: "john@example.com", Role: "customer"},
+	}
+	svc.On("Login", mock.Anything, req).Return(loginResp, nil)
+
+	w := postJSON(router, "/api/v1/auth/login", req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := parseBody(t, w)
+	assert.True(t, body["success"].(bool))
+	data := body["data"].(map[string]any)
+	assert.Equal(t, "access.token.here", data["access_token"])
+	assert.Equal(t, "refresh-token-hex", data["refresh_token"])
+	svc.AssertExpectations(t)
+}
+
+func TestLoginHandler_InvalidCredentials_Returns401(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	req := dto.LoginRequest{Email: "john@example.com", Password: "wrong"}
+	svc.On("Login", mock.Anything, req).Return(nil, service.ErrInvalidCredentials)
+
+	w := postJSON(router, "/api/v1/auth/login", req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	body := parseBody(t, w)
+	assert.False(t, body["success"].(bool))
+	errDetail := body["error"].(map[string]any)
+	assert.Equal(t, "INVALID_CREDENTIALS", errDetail["code"])
+}
+
+func TestLoginHandler_AccountLocked_Returns403(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	req := dto.LoginRequest{Email: "locked@example.com", Password: "secret123"}
+	svc.On("Login", mock.Anything, req).Return(nil, service.ErrAccountLocked)
+
+	w := postJSON(router, "/api/v1/auth/login", req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	body := parseBody(t, w)
+	assert.False(t, body["success"].(bool))
+	errDetail := body["error"].(map[string]any)
+	assert.Equal(t, "ACCOUNT_LOCKED", errDetail["code"])
+}
+
+func TestLoginHandler_ValidationError_Returns400(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	w := postJSON(router, "/api/v1/auth/login", map[string]any{"email": "not-valid"})
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	svc.AssertNotCalled(t, "Login")
+}
+
+// ─── Refresh tests ────────────────────────────────────────────────────────────
+
+func TestRefreshHandler_Success_Returns200(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	refreshToken := "some-refresh-token"
+	refreshResp := &dto.LoginResponse{
+		AccessToken: "new.access.token",
+		User:        dto.UserResponse{ID: "uuid-1", Email: "john@example.com", Role: "customer"},
+	}
+	svc.On("Refresh", mock.Anything, refreshToken).Return(refreshResp, nil)
+
+	w := postJSON(router, "/api/v1/auth/refresh", map[string]any{"refresh_token": refreshToken})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := parseBody(t, w)
+	assert.True(t, body["success"].(bool))
+	data := body["data"].(map[string]any)
+	assert.Equal(t, "new.access.token", data["access_token"])
+	svc.AssertExpectations(t)
+}
+
+func TestRefreshHandler_InvalidToken_Returns401(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	svc.On("Refresh", mock.Anything, "bad-token").Return(nil, service.ErrInvalidToken)
+
+	w := postJSON(router, "/api/v1/auth/refresh", map[string]any{"refresh_token": "bad-token"})
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	body := parseBody(t, w)
+	assert.False(t, body["success"].(bool))
+	errDetail := body["error"].(map[string]any)
+	assert.Equal(t, "INVALID_TOKEN", errDetail["code"])
 }

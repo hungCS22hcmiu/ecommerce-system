@@ -21,6 +21,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
+	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 )
 
 func main() {
@@ -31,6 +32,19 @@ func main() {
 
 	// ── Config ────────────────────────────────────────────────────────────────
 	cfg := config.Load()
+
+	// ── RSA Keys (fail fast if missing) ───────────────────────────────────────
+	privateKey, err := jwtpkg.LoadPrivateKey(cfg.JWTPrivateKeyPath)
+	if err != nil {
+		slog.Error("failed to load JWT private key", "path", cfg.JWTPrivateKeyPath, "error", err)
+		os.Exit(1)
+	}
+	publicKey, err := jwtpkg.LoadPublicKey(cfg.JWTPublicKeyPath)
+	if err != nil {
+		slog.Error("failed to load JWT public key", "path", cfg.JWTPublicKeyPath, "error", err)
+		os.Exit(1)
+	}
+	slog.Info("JWT keys loaded", "private", cfg.JWTPrivateKeyPath, "public", cfg.JWTPublicKeyPath)
 
 	// ── PostgreSQL ────────────────────────────────────────────────────────────
 	db, err := gorm.Open(postgres.Open(cfg.DSN()), &gorm.Config{
@@ -62,7 +76,12 @@ func main() {
 	slog.Info("redis connected", "addr", cfg.RedisAddr())
 
 	// ── AutoMigrate ───────────────────────────────────────────────────────────
-	if err := db.AutoMigrate(&model.User{}, &model.UserProfile{}, &model.UserAddress{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.UserProfile{},
+		&model.UserAddress{},
+		&model.AuthToken{},
+	); err != nil {
 		slog.Error("automigrate failed", "error", err)
 		os.Exit(1)
 	}
@@ -86,13 +105,16 @@ func main() {
 
 	// API v1 group
 	userRepo := repository.NewUserRepository(db)
-	authSvc := service.NewAuthService(userRepo)
+	authTokenRepo := repository.NewAuthTokenRepository(db)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, privateKey, publicKey)
 	authHandler := handler.NewAuthHandler(authSvc)
 
 	v1 := router.Group("/api/v1")
 	{
 		auth := v1.Group("/auth")
 		auth.POST("/register", authHandler.Register)
+		auth.POST("/login", authHandler.Login)
+		auth.POST("/refresh", authHandler.Refresh)
 	}
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────

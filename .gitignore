@@ -1,3 +1,5 @@
 prompting.txt
 .env
 user-service/tmp/
+user-service/keys/
+CLAUDE.md

@@ -111,9 +111,61 @@ Error codes:
 Password storage:
   Passwords are hashed with bcrypt cost 12 ($2a$12$...) and never returned in responses.
 
-Planned endpoints (Days 8–10):
-  POST /api/v1/auth/login
-  POST /api/v1/auth/refresh
+POST /api/v1/auth/login
+  Authenticate user. Returns RS256 access token (15 min) + opaque refresh token (7 days).
+  Locked after 5 consecutive failures (SELECT ... FOR UPDATE protects the counter).
+
+  Validation rules:
+    email    — required, valid email
+    password — required
+
+  --- Success (200) ---
+  curl -X POST http://localhost:8001/api/v1/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com","password":"password123"}'
+
+  Response 200:
+    {
+      "success": true,
+      "data": {
+        "access_token": "<jwt>",
+        "refresh_token": "<128-char hex>",
+        "user": {"id":"<uuid>","email":"alice@example.com","role":"customer","first_name":"Alice","last_name":"Smith"}
+      }
+    }
+
+  --- Invalid credentials (401) ---
+  Response 401:
+    {"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"invalid email or password",...}}
+
+  --- Account locked (403) ---
+  Response 403:
+    {"success":false,"error":{"code":"ACCOUNT_LOCKED","message":"account is locked due to too many failed login attempts",...}}
+
+
+POST /api/v1/auth/refresh
+  Exchange a valid refresh token for a new access token.
+
+  --- Success (200) ---
+  curl -X POST http://localhost:8001/api/v1/auth/refresh \
+    -H "Content-Type: application/json" \
+    -d '{"refresh_token":"<128-char hex>"}'
+
+  Response 200:
+    {
+      "success": true,
+      "data": {
+        "access_token": "<new-jwt>",
+        "user": {"id":"<uuid>","email":"alice@example.com","role":"customer"}
+      }
+    }
+
+  --- Invalid/expired token (401) ---
+  Response 401:
+    {"success":false,"error":{"code":"INVALID_TOKEN","message":"refresh token is invalid or expired",...}}
+
+
+Planned endpoints (Day 9–10):
   POST /api/v1/auth/logout
   GET  /api/v1/users/profile
   PUT  /api/v1/users/profile
