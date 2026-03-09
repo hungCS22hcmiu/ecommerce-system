@@ -78,7 +78,7 @@ Go service internal layout:
 - `internal/dto/` — request/response structs with `validate:"..."` tags
 - `pkg/response/` — shared response envelope helpers (`Success`, `Created`, `Error`, `BadRequest`, `Conflict`, `InternalError`, etc.)
 - `pkg/password/` — bcrypt helpers: `Hash(plain) → hash`, `Compare(hash, plain) → bool`
-- `pkg/jwt/` — JWT helpers (RS256, planned Day 8)
+- `pkg/jwt/` — JWT helpers (RS256, placeholder — not yet implemented)
 - `api.txt` — curl-based API testing reference for the service
 
 ### Go Service Patterns
@@ -181,15 +181,22 @@ All responses use a consistent shape (defined in `api/openapi.yaml`):
 
 ## Implementation Progress
 
-### user-service (Day 7 complete)
+### user-service (Day 8 complete)
 Implemented:
-- `internal/model/` — `User`, `UserProfile`, `UserAddress` (GORM + UUID PKs)
+- `internal/model/` — `User`, `UserProfile`, `UserAddress` (GORM + UUID PKs, soft delete on User)
 - `pkg/password/` — bcrypt cost 12
-- `internal/dto/register_request.go` + `UserResponse`
-- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`
-- `internal/service/auth_service.go` — `Register` with duplicate check + transaction
-- `internal/handler/auth_handler.go` — `POST /api/v1/auth/register`
-- Unit tests: `pkg/password`, `internal/service`, `internal/handler` — race-detector clean
+- `internal/dto/register_request.go` + `UserResponse` (password never returned)
+- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`; returns `ErrNotFound` sentinel
+- `internal/service/auth_service.go` — `Register` with duplicate check + GORM transaction; error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`
+- `internal/handler/auth_handler.go` — `POST /api/v1/auth/register`; validation errors mapped to field→tag map
+- `internal/handler/health_handler.go` — `/health/live` (always up) + `/health/ready` (pings Postgres + Redis)
+- `internal/middleware/` — panic recovery (logs correlationID) + structured JSON logger (injects X-Correlation-ID)
+- `pkg/jwt/` — placeholder only; RS256 JWT planned for login endpoint
+- `Dockerfile` — multi-stage production build (CGO_ENABLED=0, alpine runtime)
+- `Dockerfile.dev` + `.air.toml` — Air hot reload for development (vol-mounted source)
+- DB connection pool: 25 max open, 5 idle, 5 min lifetime
+- Graceful shutdown on SIGTERM/SIGINT
+- Unit tests: `pkg/password`, `internal/service`, `internal/handler` (15 tests) — race-detector clean
 
 Active endpoints:
 - `GET  /health/live`
