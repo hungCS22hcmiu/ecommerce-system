@@ -78,7 +78,8 @@ Go service internal layout:
 - `internal/dto/` — request/response structs with `validate:"..."` tags
 - `pkg/response/` — shared response envelope helpers (`Success`, `Created`, `Error`, `BadRequest`, `Conflict`, `InternalError`, etc.)
 - `pkg/password/` — bcrypt helpers: `Hash(plain) → hash`, `Compare(hash, plain) → bool`
-- `pkg/jwt/` — JWT helpers (RS256, placeholder — not yet implemented)
+- `pkg/jwt/` — JWT helpers (RS256): `GenerateAccessToken`, `GenerateRefreshToken`, `ValidateToken`, `LoadPrivateKey`/`LoadPublicKey`
+- `pkg/blacklist/` — `Blacklist` interface + Redis impl; `Add(jti, ttl)` / `Contains(jti)` using `blacklist:{jti}` key pattern
 - `api.txt` — curl-based API testing reference for the service
 
 ### Go Service Patterns
@@ -181,27 +182,38 @@ All responses use a consistent shape (defined in `api/openapi.yaml`):
 
 ## Implementation Progress
 
-### user-service (Day 8 complete)
+### user-service (Day 9 complete)
 Implemented:
-- `internal/model/` — `User`, `UserProfile`, `UserAddress` (GORM + UUID PKs, soft delete on User)
+- `internal/model/` — `User`, `UserProfile`, `UserAddress`, `AuthToken` (GORM + UUID PKs, soft delete on User; AuthToken stores SHA-256 hashed refresh token)
 - `pkg/password/` — bcrypt cost 12
-- `internal/dto/register_request.go` + `UserResponse` (password never returned)
-- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`; returns `ErrNotFound` sentinel
-- `internal/service/auth_service.go` — `Register` with duplicate check + GORM transaction; error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`
-- `internal/handler/auth_handler.go` — `POST /api/v1/auth/register`; validation errors mapped to field→tag map
+- `pkg/jwt/` — RS256 JWT: `GenerateAccessToken` (15 min TTL, jti claim), `GenerateRefreshToken` (128-char hex), `ValidateToken`, `LoadPrivateKey`/`LoadPublicKey`
+- `pkg/blacklist/` — `Blacklist` interface + Redis impl (`blacklist:{jti}` key, TTL = remaining access-token lifetime)
+- `internal/dto/` — `RegisterRequest`, `LoginRequest`, `LoginResponse`, `RefreshRequest`, `UserResponse` (password never returned)
+- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`, `FindByEmailForUpdate` (SELECT … FOR UPDATE + Preload("Profile")), `UpdateLoginAttempts`
+- `internal/repository/auth_token_repository.go` — `Create`, `FindByHash`, `RevokeByUserID`
+- `internal/service/auth_service.go` — `Register`, `Login` (pessimistic lock, lockout), `Refresh`, `Logout` (parse JWT → blacklist jti → RevokeByUserID); error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`, `ErrInvalidToken`
+- `internal/handler/auth_handler.go` — register, login, refresh, logout handlers; validation errors mapped to field→tag map
 - `internal/handler/health_handler.go` — `/health/live` (always up) + `/health/ready` (pings Postgres + Redis)
-- `internal/middleware/` — panic recovery (logs correlationID) + structured JSON logger (injects X-Correlation-ID)
-- `pkg/jwt/` — placeholder only; RS256 JWT planned for login endpoint
+- `internal/middleware/` — panic recovery + structured JSON logger (X-Correlation-ID) + `Auth` JWT middleware (Bearer extraction → RS256 validate → Redis blacklist check → context injection)
 - `Dockerfile` — multi-stage production build (CGO_ENABLED=0, alpine runtime)
 - `Dockerfile.dev` + `.air.toml` — Air hot reload for development (vol-mounted source)
 - DB connection pool: 25 max open, 5 idle, 5 min lifetime
 - Graceful shutdown on SIGTERM/SIGINT
-- Unit tests: `pkg/password`, `internal/service`, `internal/handler` (15 tests) — race-detector clean
+- Unit tests: `pkg/password`, `pkg/jwt`, `internal/service`, `internal/handler`, `internal/middleware` — race-detector clean
 
 Active endpoints:
 - `GET  /health/live`
 - `GET  /health/ready`
 - `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`  ← protected by Auth middleware
+
+### NewAuthService signature (Day 9)
+```go
+service.NewAuthService(userRepo, authTokenRepo, db, bl, privateKey, publicKey)
+// bl is pkg/blacklist.Blacklist
+```
 
 Stale-table note: if AutoMigrate fails with "constraint does not exist", drop the tables in psql and restart:
 ```bash
