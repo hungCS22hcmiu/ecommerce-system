@@ -21,6 +21,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 )
 
@@ -106,8 +107,10 @@ func main() {
 	// API v1 group
 	userRepo := repository.NewUserRepository(db)
 	authTokenRepo := repository.NewAuthTokenRepository(db)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, privateKey, publicKey)
+	bl := blacklist.New(rdb)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, privateKey, publicKey)
 	authHandler := handler.NewAuthHandler(authSvc)
+	authMiddleware := middleware.Auth(publicKey, bl)
 
 	v1 := router.Group("/api/v1")
 	{
@@ -115,6 +118,11 @@ func main() {
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
 		auth.POST("/refresh", authHandler.Refresh)
+
+		// Protected — require valid JWT
+		protected := v1.Group("/auth")
+		protected.Use(authMiddleware)
+		protected.POST("/logout", authHandler.Logout)
 	}
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────

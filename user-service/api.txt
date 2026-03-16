@@ -165,8 +165,59 @@ POST /api/v1/auth/refresh
     {"success":false,"error":{"code":"INVALID_TOKEN","message":"refresh token is invalid or expired",...}}
 
 
-Planned endpoints (Day 9–10):
-  POST /api/v1/auth/logout
+POST /api/v1/auth/logout
+  Revoke the current access token (Redis blacklist) and all refresh tokens for the user (DB).
+  Requires: Authorization: Bearer <access_token>
+
+  The service parses the JWT to extract jti and userID:
+    - Sets blacklist:{jti} in Redis with remaining access-token TTL
+    - Marks all auth_tokens rows for the user as revoked = true
+
+  --- Success (200) ---
+  # Capture token from login first:
+  TOKEN=$(curl -s -X POST http://localhost:8001/api/v1/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com","password":"password123"}' \
+    | jq -r '.data.access_token')
+
+  curl -X POST http://localhost:8001/api/v1/auth/logout \
+    -H "Authorization: Bearer $TOKEN"
+
+  Response 200:
+    {"success":true,"data":{"message":"logged out"}}
+
+  --- Missing/invalid token (401) ---
+  curl -X POST http://localhost:8001/api/v1/auth/logout
+
+  Response 401 (no header):
+    {"success":false,"error":{"code":"UNAUTHORIZED","message":"missing or malformed authorization header",...}}
+
+  --- Revoked token reuse (401) ---
+  # Using the same $TOKEN again after logout:
+  curl -X POST http://localhost:8001/api/v1/auth/logout \
+    -H "Authorization: Bearer $TOKEN"
+
+  Response 401:
+    {"success":false,"error":{"code":"UNAUTHORIZED","message":"token has been revoked",...}}
+
+
+─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
+
+All protected routes require:
+  Authorization: Bearer <access_token>
+
+Middleware checks (in order):
+  1. Header present and starts with "Bearer " → 401 UNAUTHORIZED if not
+  2. JWT signature valid + not expired (RS256)  → 401 UNAUTHORIZED if not
+  3. GET blacklist:{jti} in Redis               → 401 UNAUTHORIZED if found
+  4. Injects into Gin context: userID, role, jti, tokenExpiry
+
+Error codes added (Day 9):
+  UNAUTHORIZED  — missing header, invalid/expired JWT, or blacklisted jti (401)
+  ACCOUNT_LOCKED — too many failed login attempts (403)
+
+
+Planned endpoints (Day 10):
   GET  /api/v1/users/profile
   PUT  /api/v1/users/profile
   POST /api/v1/users/addresses

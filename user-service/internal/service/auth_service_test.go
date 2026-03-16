@@ -20,6 +20,8 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
+	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/password"
 )
 
@@ -205,7 +207,7 @@ func TestLogin_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	user := &model.User{
@@ -249,7 +251,7 @@ func TestLogin_UserNotFound_ReturnsErrInvalidCredentials(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	dbMock.ExpectBegin()
 	dbMock.ExpectRollback()
@@ -268,7 +270,7 @@ func TestLogin_AccountLocked_ReturnsErrAccountLocked(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	user := &model.User{Email: "john@example.com", IsLocked: true}
@@ -291,7 +293,7 @@ func TestLogin_WrongPassword_ReturnsErrInvalidCredentials(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	// password hash for "correct-password", not "secret123"
@@ -326,7 +328,7 @@ func TestLogin_WrongPassword_AtMaxAttempts_ReturnsErrAccountLocked(t *testing.T)
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("correct-password")
@@ -361,7 +363,7 @@ func TestLogin_UpdateAttemptsError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
@@ -389,7 +391,7 @@ func TestLogin_CreateAuthTokenError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
@@ -420,7 +422,7 @@ func TestRefresh_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	rawToken := "some-raw-refresh-token"
@@ -450,7 +452,7 @@ func TestRefresh_TokenNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, privKey, pubKey)
 
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
 		Return(nil, repository.ErrTokenNotFound)
@@ -465,7 +467,7 @@ func TestRefresh_DBError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, privKey, pubKey)
 
 	dbErr := errors.New("connection lost")
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
@@ -481,7 +483,7 @@ func TestRefresh_UserNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	authToken := &model.AuthToken{
@@ -497,4 +499,96 @@ func TestRefresh_UserNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	_, err := svc.Refresh(context.Background(), "some-token")
 
 	assert.ErrorIs(t, err, service.ErrInvalidToken)
+}
+
+// ─── Mock blacklist ───────────────────────────────────────────────────────────
+
+type mockBlacklist struct {
+	mock.Mock
+}
+
+func (m *mockBlacklist) Add(ctx context.Context, jti string, ttl time.Duration) error {
+	args := m.Called(ctx, jti, ttl)
+	return args.Error(0)
+}
+
+func (m *mockBlacklist) Contains(ctx context.Context, jti string) (bool, error) {
+	args := m.Called(ctx, jti)
+	return args.Bool(0), args.Error(1)
+}
+
+// Ensure mockBlacklist satisfies the interface at compile time.
+var _ blacklist.Blacklist = (*mockBlacklist)(nil)
+
+// ─── Logout tests ─────────────────────────────────────────────────────────────
+
+// mintToken is a helper that generates a signed access token for a given userID.
+func mintToken(t *testing.T, privKey *rsa.PrivateKey, userID string) string {
+	t.Helper()
+	tok, err := jwtpkg.GenerateAccessToken(userID, "test@example.com", "customer", privKey)
+	require.NoError(t, err)
+	return tok
+}
+
+func TestLogout_Success_BlacklistsJTIAndRevokesRefreshTokens(t *testing.T) {
+	bl := new(mockBlacklist)
+	tokenRepo := new(mockAuthTokenRepo)
+	privKey, pubKey := generateTestRSAKey(t)
+	userID := uuid.New()
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, privKey, pubKey)
+
+	token := mintToken(t, privKey, userID.String())
+
+	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.MatchedBy(func(ttl time.Duration) bool {
+		return ttl > 0 && ttl <= 15*time.Minute
+	})).Return(nil)
+	tokenRepo.On("RevokeByUserID", mock.Anything, userID).Return(nil)
+
+	err := svc.Logout(context.Background(), token)
+
+	require.NoError(t, err)
+	bl.AssertExpectations(t)
+	tokenRepo.AssertExpectations(t)
+}
+
+func TestLogout_InvalidToken_ReturnsErrInvalidToken(t *testing.T) {
+	_, pubKey := generateTestRSAKey(t)
+	svc := service.NewAuthService(nil, nil, nil, nil, nil, pubKey)
+
+	err := svc.Logout(context.Background(), "not.a.valid.jwt")
+
+	assert.ErrorIs(t, err, service.ErrInvalidToken)
+}
+
+func TestLogout_BlacklistError_ReturnsError(t *testing.T) {
+	bl := new(mockBlacklist)
+	privKey, pubKey := generateTestRSAKey(t)
+	userID := uuid.New()
+	svc := service.NewAuthService(nil, nil, nil, bl, privKey, pubKey)
+
+	token := mintToken(t, privKey, userID.String())
+	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(errors.New("redis down"))
+
+	err := svc.Logout(context.Background(), token)
+
+	assert.Error(t, err)
+	bl.AssertExpectations(t)
+}
+
+func TestLogout_RevokeByUserIDError_ReturnsError(t *testing.T) {
+	bl := new(mockBlacklist)
+	tokenRepo := new(mockAuthTokenRepo)
+	privKey, pubKey := generateTestRSAKey(t)
+	userID := uuid.New()
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, privKey, pubKey)
+
+	token := mintToken(t, privKey, userID.String())
+	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil)
+	tokenRepo.On("RevokeByUserID", mock.Anything, userID).Return(errors.New("db error"))
+
+	err := svc.Logout(context.Background(), token)
+
+	assert.Error(t, err)
+	bl.AssertExpectations(t)
+	tokenRepo.AssertExpectations(t)
 }

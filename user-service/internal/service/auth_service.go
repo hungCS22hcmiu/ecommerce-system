@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/dto"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/password"
 )
@@ -34,12 +36,14 @@ type AuthService interface {
 	Register(ctx context.Context, req dto.RegisterRequest) (*model.User, error)
 	Login(ctx context.Context, req dto.LoginRequest) (*dto.LoginResponse, error)
 	Refresh(ctx context.Context, refreshToken string) (*dto.LoginResponse, error)
+	Logout(ctx context.Context, accessToken string) error
 }
 
 type authService struct {
 	userRepo      repository.UserRepository
 	authTokenRepo repository.AuthTokenRepository
 	db            *gorm.DB
+	bl            blacklist.Blacklist
 	privateKey    *rsa.PrivateKey
 	publicKey     *rsa.PublicKey
 }
@@ -49,6 +53,7 @@ func NewAuthService(
 	userRepo repository.UserRepository,
 	authTokenRepo repository.AuthTokenRepository,
 	db *gorm.DB,
+	bl blacklist.Blacklist,
 	privateKey *rsa.PrivateKey,
 	publicKey *rsa.PublicKey,
 ) AuthService {
@@ -56,6 +61,7 @@ func NewAuthService(
 		userRepo:      userRepo,
 		authTokenRepo: authTokenRepo,
 		db:            db,
+		bl:            bl,
 		privateKey:    privateKey,
 		publicKey:     publicKey,
 	}
@@ -205,6 +211,30 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (*dto.Lo
 			Role:  user.Role,
 		},
 	}, nil
+}
+
+// Logout parses the access token, blacklists its jti in Redis,
+// and revokes all refresh tokens for the user in the DB.
+func (s *authService) Logout(ctx context.Context, accessToken string) error {
+	claims, err := jwtpkg.ValidateToken(accessToken, s.publicKey)
+	if err != nil {
+		return ErrInvalidToken
+	}
+
+	// Blacklist the jti for the remaining access-token lifetime.
+	ttl := time.Until(claims.ExpiresAt.Time)
+	if ttl > 0 {
+		if err := s.bl.Add(ctx, claims.ID, ttl); err != nil {
+			return err
+		}
+	}
+
+	// Revoke all refresh tokens for this user.
+	userID, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		return fmt.Errorf("invalid user id in token: %w", err)
+	}
+	return s.authTokenRepo.RevokeByUserID(ctx, userID)
 }
 
 // hashToken returns the SHA-256 hex digest of a token string.
