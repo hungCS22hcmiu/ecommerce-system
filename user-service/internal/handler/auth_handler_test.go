@@ -53,6 +53,11 @@ func (m *mockAuthService) Refresh(ctx context.Context, refreshToken string) (*dt
 	return args.Get(0).(*dto.LoginResponse), args.Error(1)
 }
 
+func (m *mockAuthService) Logout(ctx context.Context, accessToken string) error {
+	args := m.Called(ctx, accessToken)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func newRouter(svc service.AuthService) *gin.Engine {
@@ -61,6 +66,7 @@ func newRouter(svc service.AuthService) *gin.Engine {
 	r.POST("/api/v1/auth/register", h.Register)
 	r.POST("/api/v1/auth/login", h.Login)
 	r.POST("/api/v1/auth/refresh", h.Refresh)
+	r.POST("/api/v1/auth/logout", h.Logout)
 	return r
 }
 
@@ -371,6 +377,64 @@ func TestLoginHandler_ServiceError_Returns500(t *testing.T) {
 	svc.On("Login", mock.Anything, req).Return(nil, assert.AnError)
 
 	w := postJSON(router, "/api/v1/auth/login", req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	body := parseBody(t, w)
+	assert.False(t, body["success"].(bool))
+	svc.AssertExpectations(t)
+}
+
+// ─── Logout tests ─────────────────────────────────────────────────────────────
+
+func logoutRequest(router *gin.Engine, bearerToken string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func TestLogoutHandler_Success_Returns200(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	svc.On("Logout", mock.Anything, "raw.token.value").Return(nil)
+
+	w := logoutRequest(router, "raw.token.value")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := parseBody(t, w)
+	assert.True(t, body["success"].(bool))
+	data := body["data"].(map[string]any)
+	assert.Equal(t, "logged out", data["message"])
+	svc.AssertExpectations(t)
+}
+
+func TestLogoutHandler_InvalidToken_Returns401(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	svc.On("Logout", mock.Anything, "bad.token").Return(service.ErrInvalidToken)
+
+	w := logoutRequest(router, "bad.token")
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	body := parseBody(t, w)
+	assert.False(t, body["success"].(bool))
+	errDetail := body["error"].(map[string]any)
+	assert.Equal(t, "UNAUTHORIZED", errDetail["code"])
+	svc.AssertExpectations(t)
+}
+
+func TestLogoutHandler_ServiceError_Returns500(t *testing.T) {
+	svc := new(mockAuthService)
+	router := newRouter(svc)
+
+	svc.On("Logout", mock.Anything, "some.token").Return(assert.AnError)
+
+	w := logoutRequest(router, "some.token")
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	body := parseBody(t, w)

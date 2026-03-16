@@ -23,6 +23,10 @@ type UserRepository interface {
 	// UpdateLoginAttempts updates the failed_login_attempts counter and is_locked flag.
 	// Must be called inside a GORM transaction.
 	UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, userID uuid.UUID, attempts int, isLocked bool) error
+	// FindByIDWithProfile loads the user with Profile and Addresses preloaded.
+	FindByIDWithProfile(ctx context.Context, id uuid.UUID) (*model.User, error)
+	// UpdateProfile updates first_name, last_name, phone on the user_profiles row.
+	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName, phone string) error
 }
 
 type userRepository struct {
@@ -60,6 +64,7 @@ func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Use
 func (r *userRepository) FindByEmailForUpdate(ctx context.Context, tx *gorm.DB, email string) (*model.User, error) {
 	var user model.User
 	err := tx.WithContext(ctx).
+		Preload("Profile").
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("email = ?", email).
 		First(&user).Error
@@ -76,5 +81,28 @@ func (r *userRepository) UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, u
 		Updates(map[string]any{
 			"failed_login_attempts": attempts,
 			"is_locked":             isLocked,
+		}).Error
+}
+
+func (r *userRepository) FindByIDWithProfile(ctx context.Context, id uuid.UUID) (*model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).
+		Preload("Profile").
+		Preload("Addresses").
+		First(&user, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &user, err
+}
+
+func (r *userRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName, phone string) error {
+	return r.db.WithContext(ctx).
+		Model(&model.UserProfile{}).
+		Where("user_id = ?", userID).
+		Updates(map[string]any{
+			"first_name": firstName,
+			"last_name":  lastName,
+			"phone":      phone,
 		}).Error
 }

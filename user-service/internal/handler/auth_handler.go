@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -126,4 +127,21 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	}
 
 	response.Success(c, refreshResp)
+}
+
+// Logout handles POST /api/v1/auth/logout
+// Requires the Auth middleware for initial token validation.
+func (h *AuthHandler) Logout(c *gin.Context) {
+	tokenStr := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+
+	if err := h.authService.Logout(c.Request.Context(), tokenStr); err != nil {
+		if errors.Is(err, service.ErrInvalidToken) {
+			response.Unauthorized(c, "invalid or expired token")
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+
+	response.Success(c, gin.H{"message": "logged out"})
 }

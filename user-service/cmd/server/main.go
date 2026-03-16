@@ -21,7 +21,10 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
 )
 
 func main() {
@@ -106,8 +109,16 @@ func main() {
 	// API v1 group
 	userRepo := repository.NewUserRepository(db)
 	authTokenRepo := repository.NewAuthTokenRepository(db)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, privateKey, publicKey)
+	bl := blacklist.New(rdb)
+	sessionCache := session.New(rdb)
+	attemptCounter := loginattempt.New(rdb)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, privateKey, publicKey)
 	authHandler := handler.NewAuthHandler(authSvc)
+	authMiddleware := middleware.Auth(publicKey, bl)
+
+	addrRepo := repository.NewAddressRepository(db)
+	userSvc := service.NewUserService(userRepo, addrRepo, sessionCache)
+	userHandler := handler.NewUserHandler(userSvc)
 
 	v1 := router.Group("/api/v1")
 	{
@@ -115,6 +126,20 @@ func main() {
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
 		auth.POST("/refresh", authHandler.Refresh)
+
+		// Protected — require valid JWT
+		protected := v1.Group("/auth")
+		protected.Use(authMiddleware)
+		protected.POST("/logout", authHandler.Logout)
+
+		users := v1.Group("/users")
+		users.Use(authMiddleware)
+		users.GET("/profile", userHandler.GetProfile)
+		users.PUT("/profile", userHandler.UpdateProfile)
+		users.POST("/addresses", userHandler.AddAddress)
+		users.PUT("/addresses/:id", userHandler.UpdateAddress)
+		users.DELETE("/addresses/:id", userHandler.DeleteAddress)
+		users.PUT("/addresses/:id/default", userHandler.SetDefaultAddress)
 	}
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────
