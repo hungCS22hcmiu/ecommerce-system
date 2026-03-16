@@ -23,6 +23,8 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
 )
 
 func main() {
@@ -108,7 +110,9 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	authTokenRepo := repository.NewAuthTokenRepository(db)
 	bl := blacklist.New(rdb)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, privateKey, publicKey)
+	sessionCache := session.New(rdb)
+	attemptCounter := loginattempt.New(rdb)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, privateKey, publicKey)
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMiddleware := middleware.Auth(publicKey, bl)
 

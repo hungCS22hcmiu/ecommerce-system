@@ -217,7 +217,159 @@ Error codes added (Day 9):
   ACCOUNT_LOCKED — too many failed login attempts (403)
 
 
-Planned endpoints (Day 10):
+─── DATABASE CONNECTION ──────────────────────────────────────────────────────
+
+Driver & ORM
+  Library:  GORM v2  (gorm.io/gorm)  +  gorm.io/driver/postgres
+  Database: PostgreSQL — logical DB "ecommerce_users" (one DB per service)
+  DSN built from env vars at startup:
+    host=$DB_HOST  port=$DB_PORT  user=$DB_USER
+    password=$DB_PASSWORD  dbname=$DB_NAME  sslmode=disable
+
+Connection pool (set in main.go after gorm.Open)
+  Max open connections : 25   ← hard ceiling on concurrent DB connections
+  Max idle connections : 5    ← kept alive between requests
+  Connection max lifetime: 5 min  ← prevents stale/recycled TCP connections
+
+Schema management
+  GORM AutoMigrate runs at startup.  Creates or alters tables to match:
+    users         — id (UUID PK), email (unique), password_hash, role,
+                    is_locked, failed_login_attempts, deleted_at (soft delete)
+    user_profiles — id, user_id (FK → users), first_name, last_name, ...
+    user_addresses — id, user_id (FK → users), address fields, is_default
+    auth_tokens   — id, user_id (FK → users), refresh_token_hash (unique),
+                    expires_at, revoked
+
+Repository pattern
+  All DB access goes through interface types in internal/repository/:
+    UserRepository      — Create, FindByEmail, FindByID,
+                          FindByEmailForUpdate (SELECT...FOR UPDATE),
+                          UpdateLoginAttempts
+    AuthTokenRepository — Create, FindByHash, RevokeByUserID
+
+  Every method receives a context.Context and calls db.WithContext(ctx)
+  so the request's deadline/cancellation propagates to the query.
+
+  FindByEmailForUpdate runs inside a GORM transaction (db.Transaction).
+  It uses clause.Locking{Strength: "UPDATE"} (SELECT...FOR UPDATE) to
+  serialise concurrent login attempts on the same email row and make the
+  failed_login_attempts counter race-free.
+
+  FindByEmailForUpdate also calls .Preload("Profile") so the user's
+  first_name / last_name are loaded in the same transaction via a
+  separate SELECT on user_profiles (the row lock is on users only).
+
+Refresh token storage
+  The raw 128-char hex token is NEVER stored.  Only its SHA-256 hex digest
+  (refresh_token_hash) is written to auth_tokens.  On /refresh the service
+  hashes the incoming token and queries by hash.  On /logout all rows for
+  the user are marked revoked=true via RevokeByUserID.
+
+Graceful shutdown
+  On SIGINT/SIGTERM the server stops accepting new requests (30 s drain),
+  then sqlDB.Close() returns all pooled connections to the OS.
+
+
+─── REDIS — HOW IT WORKS ────────────────────────────────────────────────────
+
+Connection
+  Library:  github.com/redis/go-redis/v9
+  One *redis.Client is created in main.go and shared across all Redis
+  packages (blacklist / session / loginattempt).  The client manages its
+  own internal connection pool (default: 10 connections).
+  Config: REDIS_HOST (default localhost) + REDIS_PORT (default 6379).
+  Startup: Ping() is called; the service exits immediately if Redis is down.
+
+The *redis.Client is injected into three purpose-built packages:
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  pkg             key pattern           TTL      purpose             │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │  pkg/blacklist   blacklist:{jti}       dynamic  JWT revocation      │
+  │  pkg/session     session:{userID}      30 min   user profile cache  │
+  │  pkg/loginattempt login_attempts:{email} 15 min  brute-force guard  │
+  └─────────────────────────────────────────────────────────────────────┘
+
+1. JWT Blacklist  (pkg/blacklist)
+   Used by: auth middleware (read) + Logout service (write)
+
+   On logout:
+     claims = ValidateToken(accessToken)        // parse JWT, get jti + expiry
+     ttl    = time.Until(claims.ExpiresAt)      // remaining lifetime
+     SET blacklist:{jti} "1" EX <ttl_seconds>   // key auto-expires with token
+
+   On every protected request (auth middleware):
+     GET blacklist:{jti}
+       → redis.Nil  → key absent → token is valid, continue
+       → any value  → token revoked → 401 UNAUTHORIZED "token has been revoked"
+
+   Why per-jti TTL?  The key lives exactly as long as the JWT itself.
+   After the JWT expires naturally, Redis discards the key automatically —
+   no cleanup job required.
+
+2. Session Cache  (pkg/session)
+   Used by: Login (write) + Refresh (read) + Logout (delete)
+   Value stored: JSON-encoded dto.UserResponse {id, email, role, first_name, last_name}
+
+   On login success:
+     SET session:{userID} <json> EX 1800   (30 min)
+
+   On /refresh:
+     GET session:{userID}
+       → hit  → use cached profile, skip FindByID DB query
+       → miss → FindByID(DB), then SET session:{userID} to warm cache
+
+   On logout:
+     DEL session:{userID}   // invalidate so a re-login repopulates it
+
+   Why this helps: after login, every /refresh call avoids a full
+   DB round-trip.  For users who refresh tokens frequently (SPA, mobile)
+   this removes a SELECT query on the hot path.
+
+3. Login Attempt Counter  (pkg/loginattempt)
+   Used by: Login service (read pre-check + write post-TX)
+   Key pattern: login_attempts:{email}
+
+   Flow inside Login:
+     ① Pre-check (before DB transaction):
+          GET login_attempts:{email}
+            → count >= 5  → return 403 ACCOUNT_LOCKED  (no DB query)
+            → count < 5   → proceed to DB transaction
+
+     ② DB transaction runs (SELECT...FOR UPDATE, verify password, etc.)
+
+     ③ Post-transaction (outside TX):
+          bad password →  INCR login_attempts:{email}
+                          if count becomes 1: EXPIRE login_attempts:{email} 900
+                          (TTL set only on first increment — 15-min sliding window)
+          success      →  DEL login_attempts:{email}
+                          + SET session:{userID} (cache profile)
+
+   Two-layer lockout:
+     Redis counter  — fast, 15-min sliding window (resets after 15 min of no attempts)
+     DB is_locked   — permanent; requires manual admin intervention to unlock
+   Both must pass for login to succeed.
+
+   Why INCR outside the DB transaction?
+     Mixing Redis I/O inside a DB transaction would hold the Postgres row
+     lock while waiting for a network round-trip to Redis.  Keeping them
+     separate means the DB lock is released as soon as the TX commits,
+     and the Redis update is best-effort (failures are non-fatal).
+
+Redis error handling
+   All three packages treat Redis errors as non-fatal for reads
+   (cache miss = fall through to DB) but surface errors for the blacklist
+   Add call (a blacklist write failure on logout is returned as 500 to
+   prevent issuing an un-revokable token).
+
+  Verify with redis-cli:
+    redis-cli GET  "session:<userId>"
+    redis-cli GET  "login_attempts:<email>"
+    redis-cli TTL  "login_attempts:<email>"    # should be ≤ 900
+    redis-cli KEYS "blacklist:*"               # active revoked JTIs
+
+
+Planned endpoints (Day 10/11):
   GET  /api/v1/users/profile
   PUT  /api/v1/users/profile
   POST /api/v1/users/addresses
@@ -225,3 +377,5 @@ Planned endpoints (Day 10):
   DELETE /api/v1/users/addresses/:id
   PUT  /api/v1/users/addresses/:id/default
   GET  /api/v1/users/:id   (internal, no auth)
+integration test: 
+go test -tags=integration -v -race ./internal/integration/
