@@ -67,6 +67,19 @@ func (m *mockUserRepo) UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, use
 	return args.Error(0)
 }
 
+func (m *mockUserRepo) FindByIDWithProfile(ctx context.Context, id uuid.UUID) (*model.User, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.User), args.Error(1)
+}
+
+func (m *mockUserRepo) UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName, phone string) error {
+	args := m.Called(ctx, userID, firstName, lastName, phone)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func validRegisterRequest() dto.RegisterRequest {

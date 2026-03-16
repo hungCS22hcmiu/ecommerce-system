@@ -116,6 +116,10 @@ func main() {
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMiddleware := middleware.Auth(publicKey, bl)
 
+	addrRepo := repository.NewAddressRepository(db)
+	userSvc := service.NewUserService(userRepo, addrRepo, sessionCache)
+	userHandler := handler.NewUserHandler(userSvc)
+
 	v1 := router.Group("/api/v1")
 	{
 		auth := v1.Group("/auth")
@@ -127,6 +131,15 @@ func main() {
 		protected := v1.Group("/auth")
 		protected.Use(authMiddleware)
 		protected.POST("/logout", authHandler.Logout)
+
+		users := v1.Group("/users")
+		users.Use(authMiddleware)
+		users.GET("/profile", userHandler.GetProfile)
+		users.PUT("/profile", userHandler.UpdateProfile)
+		users.POST("/addresses", userHandler.AddAddress)
+		users.PUT("/addresses/:id", userHandler.UpdateAddress)
+		users.DELETE("/addresses/:id", userHandler.DeleteAddress)
+		users.PUT("/addresses/:id/default", userHandler.SetDefaultAddress)
 	}
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────

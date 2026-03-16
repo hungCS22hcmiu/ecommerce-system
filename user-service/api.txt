@@ -369,13 +369,188 @@ Redis error handling
     redis-cli KEYS "blacklist:*"               # active revoked JTIs
 
 
-Planned endpoints (Day 10/11):
-  GET  /api/v1/users/profile
-  PUT  /api/v1/users/profile
-  POST /api/v1/users/addresses
-  PUT  /api/v1/users/addresses/:id
-  DELETE /api/v1/users/addresses/:id
-  PUT  /api/v1/users/addresses/:id/default
-  GET  /api/v1/users/:id   (internal, no auth)
-integration test: 
+─── USERS ────────────────────────────────────────────────────────────────────
+
+All /users routes require:  Authorization: Bearer <access_token>
+
+GET /api/v1/users/profile
+  Return the authenticated user's full profile including addresses.
+
+  # First capture a token:
+  TOKEN=$(curl -s -X POST http://localhost:8001/api/v1/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com","password":"password123"}' \
+    | jq -r '.data.access_token')
+
+  curl http://localhost:8001/api/v1/users/profile \
+    -H "Authorization: Bearer $TOKEN"
+
+  Response 200:
+    {
+      "success": true,
+      "data": {
+        "id": "<uuid>",
+        "email": "alice@example.com",
+        "role": "customer",
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "phone": "0900000000",
+        "avatar_url": "",
+        "addresses": [
+          {
+            "id": "<uuid>",
+            "label": "home",
+            "address_line1": "123 Main St",
+            "address_line2": "",
+            "city": "Ho Chi Minh",
+            "state": "",
+            "country": "Vietnam",
+            "postal_code": "",
+            "is_default": true
+          }
+        ]
+      }
+    }
+
+  Response 401 (missing/invalid token):
+    {"success":false,"error":{"code":"UNAUTHORIZED","message":"...",...}}
+
+  Response 404 (user deleted mid-session):
+    {"success":false,"error":{"code":"NOT_FOUND","message":"user not found",...}}
+
+
+PUT /api/v1/users/profile
+  Update first_name, last_name, and/or phone on the profile.
+  Invalidates Redis session cache so the next /auth/refresh re-reads from DB.
+
+  Validation rules:
+    first_name — required, min 1 char, max 100 chars
+    last_name  — required, min 1 char, max 100 chars
+    phone      — optional, max 20 chars
+
+  --- Success (200) ---
+  curl -X PUT http://localhost:8001/api/v1/users/profile \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"first_name":"Jane","last_name":"Doe","phone":"0912345678"}'
+
+  Response 200: (same shape as GET /profile, with updated fields)
+
+  --- Validation error (400) ---
+  curl -X PUT http://localhost:8001/api/v1/users/profile \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{}'
+
+  Response 400:
+    {
+      "success": false,
+      "error": {
+        "code": "VALIDATION_ERROR",
+        "message": "validation failed",
+        "details": {"FirstName":"required","LastName":"required"}
+      }
+    }
+
+  Response 401 (missing/invalid token):
+    {"success":false,"error":{"code":"UNAUTHORIZED","message":"...",...}}
+
+  Response 404 (user deleted mid-session):
+    {"success":false,"error":{"code":"NOT_FOUND","message":"user not found",...}}
+
+
+Error codes (Day 10–11):
+  NOT_FOUND   — resource does not exist (404)
+  FORBIDDEN   — resource belongs to a different user (403)
+
+
+POST /api/v1/users/addresses
+  Add a new address for the authenticated user.
+
+  Validation rules:
+    address_line1 — required, max 255 chars
+    city          — required, max 100 chars
+    country       — required, max 100 chars
+    label         — optional, max 50 chars
+    address_line2 — optional, max 255 chars
+    state         — optional, max 100 chars
+    postal_code   — optional, max 20 chars
+
+  --- Success (201) ---
+  curl -X POST http://localhost:8001/api/v1/users/addresses \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"address_line1":"123 Main St","city":"Ho Chi Minh","country":"Vietnam","label":"home"}'
+
+  Response 201:
+    {
+      "success": true,
+      "data": {
+        "id": "<uuid>",
+        "label": "home",
+        "address_line1": "123 Main St",
+        "address_line2": "",
+        "city": "Ho Chi Minh",
+        "state": "",
+        "country": "Vietnam",
+        "postal_code": "",
+        "is_default": false
+      }
+    }
+
+  --- Validation error (400) ---
+  Response 400: VALIDATION_ERROR with details map
+
+
+PUT /api/v1/users/addresses/:id
+  Update an existing address. Returns 403 if the address belongs to another user.
+
+  Same validation rules as POST /addresses.
+
+  ADDR_ID=<uuid from POST response>
+
+  --- Success (200) ---
+  curl -X PUT http://localhost:8001/api/v1/users/addresses/$ADDR_ID \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"address_line1":"456 New St","city":"Hanoi","country":"Vietnam"}'
+
+  Response 200: updated AddressResponse
+
+  Response 403 (address owned by another user):
+    {"success":false,"error":{"code":"FORBIDDEN","message":"address does not belong to this user",...}}
+
+  Response 404 (address not found):
+    {"success":false,"error":{"code":"NOT_FOUND","message":"address not found",...}}
+
+
+DELETE /api/v1/users/addresses/:id
+  Remove an address. Returns 204 No Content on success.
+
+  curl -X DELETE http://localhost:8001/api/v1/users/addresses/$ADDR_ID \
+    -H "Authorization: Bearer $TOKEN"
+
+  Response 204: (no body)
+  Response 403: address owned by another user
+  Response 404: address not found
+
+
+PUT /api/v1/users/addresses/:id/default
+  Mark an address as the default shipping address.
+  Atomically clears is_default on all other user addresses, then sets is_default=true on this one.
+
+  curl -X PUT http://localhost:8001/api/v1/users/addresses/$ADDR_ID/default \
+    -H "Authorization: Bearer $TOKEN"
+
+  Response 200:
+    {"success":true,"data":{"id":"...","is_default":true,...}}
+
+  Response 403: address owned by another user
+  Response 404: address not found
+
+
+Planned endpoints:
+  GET /api/v1/users/:id   (internal, no auth — for inter-service calls)
+
+integration test:
 go test -tags=integration -v -race ./internal/integration/
