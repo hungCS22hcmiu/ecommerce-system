@@ -241,6 +241,8 @@ func TestLogin_Success(t *testing.T) {
 	assert.NotEmpty(t, resp.RefreshToken)
 	assert.Equal(t, "john@example.com", resp.User.Email)
 	assert.Equal(t, "customer", resp.User.Role)
+	assert.Equal(t, "John", resp.User.FirstName)
+	assert.Equal(t, "Doe", resp.User.LastName)
 	require.NoError(t, dbMock.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
 	tokenRepo.AssertExpectations(t)

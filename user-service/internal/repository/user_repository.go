@@ -60,6 +60,7 @@ func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.Use
 func (r *userRepository) FindByEmailForUpdate(ctx context.Context, tx *gorm.DB, email string) (*model.User, error) {
 	var user model.User
 	err := tx.WithContext(ctx).
+		Preload("Profile").
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("email = ?", email).
 		First(&user).Error
