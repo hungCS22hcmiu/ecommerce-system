@@ -80,6 +80,40 @@ func newUserSvc(userRepo *mockUserRepo, addrRepo *mockAddressRepo, sess *mockSes
 	return service.NewUserService(userRepo, addrRepo, sess)
 }
 
+// ─── GetUser tests ────────────────────────────────────────────────────────────
+
+func TestGetUser_Success(t *testing.T) {
+	userID := uuid.New()
+	user := userWithProfile(userID)
+
+	repo := &mockUserRepo{}
+	repo.On("FindByIDWithProfile", mock.Anything, userID).Return(user, nil)
+
+	svc := newUserSvc(repo, &mockAddressRepo{}, &mockSessionCache{})
+	resp, err := svc.GetUser(context.Background(), userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, userID.String(), resp.ID)
+	assert.Equal(t, "alice@example.com", resp.Email)
+	assert.Equal(t, "customer", resp.Role)
+	assert.Equal(t, "Alice", resp.FirstName)
+	assert.Equal(t, "Smith", resp.LastName)
+	repo.AssertExpectations(t)
+}
+
+func TestGetUser_NotFound(t *testing.T) {
+	userID := uuid.New()
+
+	repo := &mockUserRepo{}
+	repo.On("FindByIDWithProfile", mock.Anything, userID).Return(nil, repository.ErrNotFound)
+
+	svc := newUserSvc(repo, &mockAddressRepo{}, &mockSessionCache{})
+	_, err := svc.GetUser(context.Background(), userID)
+
+	assert.ErrorIs(t, err, service.ErrUserNotFound)
+	repo.AssertExpectations(t)
+}
+
 // ─── GetProfile tests ─────────────────────────────────────────────────────────
 
 func TestGetProfile_Success(t *testing.T) {

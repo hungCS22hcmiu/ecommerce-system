@@ -18,6 +18,7 @@ var (
 )
 
 type UserService interface {
+	GetUser(ctx context.Context, userID uuid.UUID) (*dto.UserResponse, error)
 	GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error)
 	UpdateProfile(ctx context.Context, userID uuid.UUID, req dto.UpdateProfileRequest) (*dto.ProfileResponse, error)
 	AddAddress(ctx context.Context, userID uuid.UUID, req dto.CreateAddressRequest) (*dto.AddressResponse, error)
@@ -34,6 +35,17 @@ type userService struct {
 
 func NewUserService(userRepo repository.UserRepository, addrRepo repository.AddressRepository, sessionCache session.Cache) UserService {
 	return &userService{userRepo: userRepo, addrRepo: addrRepo, sessionCache: sessionCache}
+}
+
+func (s *userService) GetUser(ctx context.Context, userID uuid.UUID) (*dto.UserResponse, error) {
+	user, err := s.userRepo.FindByIDWithProfile(ctx, userID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return toUserResponse(user), nil
 }
 
 func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error) {
@@ -141,6 +153,19 @@ func (s *userService) SetDefaultAddress(ctx context.Context, userID, addressID u
 	addr.IsDefault = true
 	resp := toAddressResponse(addr)
 	return &resp, nil
+}
+
+func toUserResponse(u *model.User) *dto.UserResponse {
+	resp := &dto.UserResponse{
+		ID:    u.ID.String(),
+		Email: u.Email,
+		Role:  u.Role,
+	}
+	if u.Profile != nil {
+		resp.FirstName = u.Profile.FirstName
+		resp.LastName = u.Profile.LastName
+	}
+	return resp
 }
 
 func toProfileResponse(u *model.User) *dto.ProfileResponse {

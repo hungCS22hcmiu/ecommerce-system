@@ -164,8 +164,8 @@ type mockAuthTokenRepo struct {
 	mock.Mock
 }
 
-func (m *mockAuthTokenRepo) Create(ctx context.Context, token *model.AuthToken) error {
-	args := m.Called(ctx, token)
+func (m *mockAuthTokenRepo) Create(ctx context.Context, tx *gorm.DB, token *model.AuthToken) error {
+	args := m.Called(ctx, tx, token)
 	return args.Error(0)
 }
 
@@ -245,7 +245,7 @@ func TestLogin_Success(t *testing.T) {
 		Return(user, nil)
 	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
 		Return(nil)
-	tokenRepo.On("Create", mock.Anything, mock.AnythingOfType("*model.AuthToken")).
+	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(nil)
 
 	resp, err := svc.Login(context.Background(), validLoginRequest())
@@ -424,7 +424,7 @@ func TestLogin_CreateAuthTokenError_ReturnsError(t *testing.T) {
 		Return(user, nil)
 	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
 		Return(nil)
-	tokenRepo.On("Create", mock.Anything, mock.AnythingOfType("*model.AuthToken")).
+	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(dbErr)
 
 	_, err = svc.Login(context.Background(), validLoginRequest())
@@ -740,7 +740,7 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 		Return(user, nil)
 	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
 		Return(nil)
-	tokenRepo.On("Create", mock.Anything, mock.AnythingOfType("*model.AuthToken")).
+	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(nil)
 	counter.On("Delete", mock.Anything, "john@example.com").Return(nil)
 	sc.On("Set", mock.Anything, userID, mock.AnythingOfType("dto.UserResponse"), mock.AnythingOfType("time.Duration")).

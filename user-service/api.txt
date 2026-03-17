@@ -122,7 +122,7 @@ POST /api/v1/auth/login
   --- Success (200) ---
   curl -X POST http://localhost:8001/api/v1/auth/login \
     -H "Content-Type: application/json" \
-    -d '{"email":"alice@example.com","password":"password123"}'
+    -d '{"email":"hung@gmail.com","password":"mcfc1213"}'
 
   Response 200:
     {
@@ -549,8 +549,38 @@ PUT /api/v1/users/addresses/:id/default
   Response 404: address not found
 
 
-Planned endpoints:
-  GET /api/v1/users/:id   (internal, no auth — for inter-service calls)
+GET /api/v1/users/:id
+  Internal endpoint for service-to-service lookups. No JWT required.
+  Security boundary: Docker internal network (not exposed externally).
+
+  Returns basic user identity: id, email, role, first_name, last_name.
+
+  --- Success (200) ---
+  curl http://localhost:8001/api/v1/users/<uuid>
+
+  Response 200:
+    {
+      "success": true,
+      "data": {
+        "id": "<uuid>",
+        "email": "alice@example.com",
+        "role": "customer",
+        "first_name": "Alice",
+        "last_name": "Smith"
+      }
+    }
+
+  --- Invalid UUID (400) ---
+  curl http://localhost:8001/api/v1/users/not-a-uuid
+
+  Response 400:
+    {"success":false,"error":{"code":"INVALID_USER_ID","message":"user ID is not a valid UUID",...}}
+
+  --- User not found (404) ---
+  curl http://localhost:8001/api/v1/users/00000000-0000-0000-0000-000000000000
+
+  Response 404:
+    {"success":false,"error":{"code":"NOT_FOUND","message":"user not found",...}}
 
 integration test:
 go test -tags=integration -v -race ./internal/integration/

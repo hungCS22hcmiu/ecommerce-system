@@ -206,9 +206,9 @@ Implemented:
 - `internal/repository/auth_token_repository.go` — `Create`, `FindByHash`, `RevokeByUserID`
 - `internal/repository/address_repository.go` — `Create`, `FindByID`, `Update`, `Delete`, `SetDefault` (atomic TX: clear all → set one)
 - `internal/service/auth_service.go` — `Register`, `Login` (pessimistic lock + Redis pre-check + two-layer lockout + session SET), `Refresh` (session cache hit skips FindByID), `Logout` (blacklist jti + session DEL + RevokeByUserID); error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`, `ErrInvalidToken`
-- `internal/service/user_service.go` — `GetProfile`, `UpdateProfile` (invalidates session cache), `AddAddress`, `UpdateAddress`, `DeleteAddress`, `SetDefaultAddress` (ownership check on all address ops); error sentinels: `ErrAddressNotFound`, `ErrAddressForbidden`
+- `internal/service/user_service.go` — `GetUser` (internal lookup, returns UserResponse), `GetProfile`, `UpdateProfile` (invalidates session cache), `AddAddress`, `UpdateAddress`, `DeleteAddress`, `SetDefaultAddress` (ownership check on all address ops); error sentinels: `ErrAddressNotFound`, `ErrAddressForbidden`
 - `internal/handler/auth_handler.go` — register, login, refresh, logout handlers; validation errors mapped to field→tag map
-- `internal/handler/user_handler.go` — profile + address handlers; `parseUserID`/`parseAddressID` helpers; `handleAddressError` for 404/403 mapping
+- `internal/handler/user_handler.go` — profile + address handlers + `GetUser` (internal, no auth); `parseUserID`/`parseAddressID` helpers; `handleAddressError` for 404/403 mapping
 - `internal/handler/health_handler.go` — `/health/live` (always up) + `/health/ready` (pings Postgres + Redis)
 - `internal/middleware/` — panic recovery + structured JSON logger (X-Correlation-ID) + `Auth` JWT middleware (Bearer extraction → RS256 validate → Redis blacklist check → context injection)
 - `internal/integration/auth_flow_test.go` — full-stack integration tests (build tag `integration`): register → login → protected route → refresh → logout → token rejected; brute-force counter; middleware rejection
@@ -226,6 +226,7 @@ Active endpoints:
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/logout`              ← protected by Auth middleware
+- `GET  /api/v1/users/:id`               ← internal, no auth; Docker network boundary only
 - `GET  /api/v1/users/profile`            ← protected
 - `PUT  /api/v1/users/profile`            ← protected; invalidates session cache
 - `POST /api/v1/users/addresses`          ← protected

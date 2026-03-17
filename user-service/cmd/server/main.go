@@ -140,6 +140,11 @@ func main() {
 		users.PUT("/addresses/:id", userHandler.UpdateAddress)
 		users.DELETE("/addresses/:id", userHandler.DeleteAddress)
 		users.PUT("/addresses/:id/default", userHandler.SetDefaultAddress)
+
+		// Internal service-to-service routes — no JWT required.
+		// Reachable only within the Docker internal network (not exposed externally).
+		usersInternal := v1.Group("/users")
+		usersInternal.GET("/:id", userHandler.GetUser)
 	}
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────

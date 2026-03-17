@@ -184,7 +184,7 @@ func (s *authService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 			RefreshTokenHash: hashToken(rawRefresh),
 			ExpiresAt:        time.Now().Add(refreshTokenTTL),
 		}
-		if err := s.authTokenRepo.Create(ctx, authToken); err != nil {
+		if err := s.authTokenRepo.Create(ctx, tx, authToken); err != nil {
 			return fmt.Errorf("save refresh token: %w", err)
 		}
 
