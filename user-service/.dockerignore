@@ -1,0 +1,16 @@
+.git
+.gitignore
+*.md
+LICENSE
+Dockerfile*
+.dockerignore
+.air.toml
+.env*
+keys/
+tmp/
+bin/
+vendor/
+testdata/
+**/*_test.go
+internal/integration/
+api.txt
