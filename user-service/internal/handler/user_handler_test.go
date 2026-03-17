@@ -27,6 +27,14 @@ type mockUserService struct {
 	mock.Mock
 }
 
+func (m *mockUserService) GetUser(ctx context.Context, userID uuid.UUID) (*dto.UserResponse, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*dto.UserResponse), args.Error(1)
+}
+
 func (m *mockUserService) GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -404,4 +412,64 @@ func TestSetDefaultAddressHandler_NotFound_Returns404(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	svc.AssertExpectations(t)
+}
+
+// ─── GetUser tests (internal, no auth) ───────────────────────────────────────
+
+func newGetUserRouter(svc service.UserService) *gin.Engine {
+	r := gin.New()
+	h := handler.NewUserHandler(svc)
+	r.GET("/api/v1/users/:id", h.GetUser)
+	return r
+}
+
+func TestGetUserHandler_Success_Returns200(t *testing.T) {
+	userID := uuid.New()
+	svc := new(mockUserService)
+	router := newGetUserRouter(svc)
+
+	svc.On("GetUser", mock.Anything, userID).Return(&dto.UserResponse{
+		ID:        userID.String(),
+		Email:     "alice@example.com",
+		Role:      "customer",
+		FirstName: "Alice",
+		LastName:  "Smith",
+	}, nil)
+
+	w := doRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/users/%s", userID), nil)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := parseBody(t, w)
+	assert.True(t, body["success"].(bool))
+	data := body["data"].(map[string]any)
+	assert.Equal(t, userID.String(), data["id"])
+	assert.Equal(t, "alice@example.com", data["email"])
+	assert.Equal(t, "Alice", data["first_name"])
+	svc.AssertExpectations(t)
+}
+
+func TestGetUserHandler_NotFound_Returns404(t *testing.T) {
+	userID := uuid.New()
+	svc := new(mockUserService)
+	router := newGetUserRouter(svc)
+
+	svc.On("GetUser", mock.Anything, userID).Return(nil, service.ErrUserNotFound)
+
+	w := doRequest(router, http.MethodGet, fmt.Sprintf("/api/v1/users/%s", userID), nil)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	svc.AssertExpectations(t)
+}
+
+func TestGetUserHandler_InvalidUUID_Returns400(t *testing.T) {
+	svc := new(mockUserService)
+	router := newGetUserRouter(svc)
+
+	w := doRequest(router, http.MethodGet, "/api/v1/users/not-a-uuid", nil)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	body := parseBody(t, w)
+	errDetail := body["error"].(map[string]any)
+	assert.Equal(t, "INVALID_USER_ID", errDetail["code"])
+	svc.AssertNotCalled(t, "GetUser")
 }

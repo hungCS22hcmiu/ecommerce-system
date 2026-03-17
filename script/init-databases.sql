@@ -19,19 +19,19 @@ CREATE DATABASE ecommerce_payments;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE users (
-    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email                 VARCHAR(255) NOT NULL,
     password_hash         VARCHAR(255) NOT NULL,
-    role                  VARCHAR(20)  NOT NULL DEFAULT 'CUSTOMER'
-                              CHECK (role IN ('ADMIN', 'SELLER', 'CUSTOMER')),
+    role                  VARCHAR(50)  NOT NULL DEFAULT 'customer',
     is_locked             BOOLEAN      NOT NULL DEFAULT FALSE,
     failed_login_attempts INT          NOT NULL DEFAULT 0,
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    deleted_at            TIMESTAMPTZ
 );
 
 CREATE TABLE user_profiles (
-    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     first_name  VARCHAR(100) NOT NULL,
     last_name   VARCHAR(100) NOT NULL,
@@ -39,24 +39,27 @@ CREATE TABLE user_profiles (
     avatar_url  TEXT,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_user_profiles_user_id UNIQUE (user_id)  -- enforces 1-to-1
+   -- CONSTRAINT uq_user_profiles_user_id UNIQUE (user_id)  -- enforces 1-to-1. 
+   CONSTRAINT uni_user_profiles_user_id UNIQUE (user_id)  -- enforces 1-to-1. 
 );
 
 CREATE TABLE user_addresses (
-    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    street      VARCHAR(255) NOT NULL,
-    city        VARCHAR(100) NOT NULL,
-    state       VARCHAR(100),
-    zip         VARCHAR(20)  NOT NULL,
-    country     VARCHAR(100) NOT NULL,
-    is_default  BOOLEAN      NOT NULL DEFAULT FALSE,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label         VARCHAR(50),
+    address_line1 VARCHAR(255) NOT NULL,
+    address_line2 VARCHAR(255),
+    city          VARCHAR(100) NOT NULL,
+    state         VARCHAR(100),
+    country       VARCHAR(100) NOT NULL,
+    postal_code   VARCHAR(20),
+    is_default    BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE auth_tokens (
-    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id             UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     refresh_token_hash  VARCHAR(255) NOT NULL,
     expires_at          TIMESTAMPTZ  NOT NULL,

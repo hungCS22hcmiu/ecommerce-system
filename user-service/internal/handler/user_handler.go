@@ -22,6 +22,29 @@ func NewUserHandler(userService service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
+// GetUser handles GET /api/v1/users/:id.
+// Internal endpoint for service-to-service lookups — no JWT auth required.
+// Security boundary: Docker internal network.
+func (h *UserHandler) GetUser(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "INVALID_USER_ID", "user ID is not a valid UUID", nil)
+		return
+	}
+
+	user, err := h.userService.GetUser(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			response.NotFound(c, "user")
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+
+	response.Success(c, user)
+}
+
 // GetProfile handles GET /api/v1/users/profile
 func (h *UserHandler) GetProfile(c *gin.Context) {
 	userID, ok := parseUserID(c)

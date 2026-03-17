@@ -11,13 +11,13 @@
 
 INSERT INTO users (id, email, password_hash, role, is_locked, failed_login_attempts)
 VALUES
-  ('a0000000-0000-0000-0000-000000000001', 'admin@example.com',    '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'ADMIN',    FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000002', 'seller1@example.com',  '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'SELLER',   FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000003', 'seller2@example.com',  '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'SELLER',   FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000004', 'customer1@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'CUSTOMER', FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000005', 'customer2@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'CUSTOMER', FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000006', 'customer3@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'CUSTOMER', FALSE, 0),
-  ('a0000000-0000-0000-0000-000000000007', 'locked@example.com',   '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'CUSTOMER', TRUE,  5)
+  ('a0000000-0000-0000-0000-000000000001', 'admin@example.com',    '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'admin',    FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000002', 'seller1@example.com',  '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'seller',   FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000003', 'seller2@example.com',  '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'seller',   FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000004', 'customer1@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'customer', FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000005', 'customer2@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'customer', FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000006', 'customer3@example.com','$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'customer', FALSE, 0),
+  ('a0000000-0000-0000-0000-000000000007', 'locked@example.com',   '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS.iK8i', 'customer', TRUE,  5)
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO user_profiles (id, user_id, first_name, last_name, phone, avatar_url)
@@ -31,7 +31,7 @@ VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'Locked',  'User',    NULL,              NULL)
 ON CONFLICT (user_id) DO NOTHING;
 
-INSERT INTO user_addresses (id, user_id, street, city, state, zip, country, is_default)
+INSERT INTO user_addresses (id, user_id, address_line1, city, state, postal_code, country, is_default)
 VALUES
   -- customer1: 2 addresses
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', '123 Main St',     'New York',    'NY', '10001', 'USA', TRUE),
@@ -294,7 +294,7 @@ INSERT INTO orders (id, user_id, cart_id, total_amount, status, shipping_address
 VALUES
   -- customer3: DELIVERED order
   (
-    'o0000000-0000-0000-0000-000000000001',
+    'e0000000-0000-0000-0000-000000000001',
     'a0000000-0000-0000-0000-000000000006',
     'c0000000-0000-0000-0000-000000000003',
     329.97,
@@ -303,7 +303,7 @@ VALUES
   ),
   -- customer2: CONFIRMED order (payment succeeded, not yet shipped)
   (
-    'o0000000-0000-0000-0000-000000000002',
+    'e0000000-0000-0000-0000-000000000002',
     'a0000000-0000-0000-0000-000000000005',
     NULL,
     99.99,
@@ -312,7 +312,7 @@ VALUES
   ),
   -- customer1: PENDING order (awaiting payment)
   (
-    'o0000000-0000-0000-0000-000000000003',
+    'e0000000-0000-0000-0000-000000000003',
     'a0000000-0000-0000-0000-000000000004',
     NULL,
     1419.97,
@@ -321,7 +321,7 @@ VALUES
   ),
   -- customer1: CANCELLED order (payment failed)
   (
-    'o0000000-0000-0000-0000-000000000004',
+    'e0000000-0000-0000-0000-000000000004',
     'a0000000-0000-0000-0000-000000000004',
     NULL,
     179.99,
@@ -330,7 +330,7 @@ VALUES
   ),
   -- customer2: SHIPPED order
   (
-    'o0000000-0000-0000-0000-000000000005',
+    'e0000000-0000-0000-0000-000000000005',
     'a0000000-0000-0000-0000-000000000005',
     NULL,
     54.99,
@@ -343,51 +343,51 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO order_items (id, order_id, product_id, product_name, quantity, unit_price)
 VALUES
   -- Order 001 (DELIVERED): StudioPods Pro + True Wireless Earbuds x2
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000001', 24, 'StudioPods Pro',            1, 249.99),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000001', 28, 'True Wireless Earbuds Lite',2,  39.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000001', 24, 'StudioPods Pro',            1, 249.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000001', 28, 'True Wireless Earbuds Lite',2,  39.99),
   -- Order 002 (CONFIRMED): Instant Pot
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000002', 42, 'Instant Pot 7-in-1',        1,  99.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000002', 42, 'Instant Pot 7-in-1',        1,  99.99),
   -- Order 003 (PENDING): ProBook X1 + Wireless Mouse + System Design x1
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000003', 1,  'ProBook X1 Laptop',         1, 1299.99),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000003', 17, 'Wireless Ergonomic Mouse',  1,   59.99),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000003', 55, 'System Design Interview',   1,   59.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000003', 1,  'ProBook X1 Laptop',         1, 1299.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000003', 17, 'Wireless Ergonomic Mouse',  1,   59.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000003', 55, 'System Design Interview',   1,   59.99),
   -- Order 004 (CANCELLED): BassBoost 500 Headphones
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000004', 25, 'BassBoost 500 Headphones',  1, 179.99),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000004', 25, 'BassBoost 500 Headphones',  1, 179.99),
   -- Order 005 (SHIPPED): Spring Boot in Action
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000005', 54, 'Spring Boot in Action',     1,  54.99)
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000005', 54, 'Spring Boot in Action',     1,  54.99)
 ON CONFLICT DO NOTHING;
 
 -- ---- Order Status History ----
 INSERT INTO order_status_history (order_id, old_status, new_status, reason, changed_by)
 VALUES
   -- Order 001: full DELIVERED journey
-  ('o0000000-0000-0000-0000-000000000001', NULL,        'PENDING',   'Order placed',               'system'),
-  ('o0000000-0000-0000-0000-000000000001', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
-  ('o0000000-0000-0000-0000-000000000001', 'CONFIRMED', 'SHIPPED',   'Shipped via FedEx',          'seller'),
-  ('o0000000-0000-0000-0000-000000000001', 'SHIPPED',   'DELIVERED', 'Delivered to customer',      'system'),
+  ('e0000000-0000-0000-0000-000000000001', NULL,        'PENDING',   'Order placed',               'system'),
+  ('e0000000-0000-0000-0000-000000000001', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
+  ('e0000000-0000-0000-0000-000000000001', 'CONFIRMED', 'SHIPPED',   'Shipped via FedEx',          'seller'),
+  ('e0000000-0000-0000-0000-000000000001', 'SHIPPED',   'DELIVERED', 'Delivered to customer',      'system'),
   -- Order 002: CONFIRMED
-  ('o0000000-0000-0000-0000-000000000002', NULL,        'PENDING',   'Order placed',               'system'),
-  ('o0000000-0000-0000-0000-000000000002', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
+  ('e0000000-0000-0000-0000-000000000002', NULL,        'PENDING',   'Order placed',               'system'),
+  ('e0000000-0000-0000-0000-000000000002', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
   -- Order 003: PENDING
-  ('o0000000-0000-0000-0000-000000000003', NULL,        'PENDING',   'Order placed',               'system'),
+  ('e0000000-0000-0000-0000-000000000003', NULL,        'PENDING',   'Order placed',               'system'),
   -- Order 004: CANCELLED
-  ('o0000000-0000-0000-0000-000000000004', NULL,        'PENDING',   'Order placed',               'system'),
-  ('o0000000-0000-0000-0000-000000000004', 'PENDING',   'CANCELLED', 'Payment failed: card declined','kafka-consumer'),
+  ('e0000000-0000-0000-0000-000000000004', NULL,        'PENDING',   'Order placed',               'system'),
+  ('e0000000-0000-0000-0000-000000000004', 'PENDING',   'CANCELLED', 'Payment failed: card declined','kafka-consumer'),
   -- Order 005: SHIPPED
-  ('o0000000-0000-0000-0000-000000000005', NULL,        'PENDING',   'Order placed',               'system'),
-  ('o0000000-0000-0000-0000-000000000005', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
-  ('o0000000-0000-0000-0000-000000000005', 'CONFIRMED', 'SHIPPED',   'Shipped via UPS #1Z999',     'seller')
+  ('e0000000-0000-0000-0000-000000000005', NULL,        'PENDING',   'Order placed',               'system'),
+  ('e0000000-0000-0000-0000-000000000005', 'PENDING',   'CONFIRMED', 'Payment succeeded',          'kafka-consumer'),
+  ('e0000000-0000-0000-0000-000000000005', 'CONFIRMED', 'SHIPPED',   'Shipped via UPS #1Z999',     'seller')
 ON CONFLICT DO NOTHING;
 
 -- ---- Notifications ----
 INSERT INTO notifications (id, order_id, user_id, type, channel, subject, body, status, sent_at)
 VALUES
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Confirmed',  'Your order has been confirmed.',        'SENT', NOW() - INTERVAL '2 days'),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Shipped',    'Your order is on its way!',             'SENT', NOW() - INTERVAL '1 day'),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Delivered',  'Your order has been delivered.',        'SENT', NOW() - INTERVAL '12 hours'),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000005', 'EMAIL', 'customer2@example.com', 'Order #o0000000-0002 Confirmed',  'Your order has been confirmed.',        'SENT', NOW() - INTERVAL '1 day'),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000004', 'EMAIL', 'customer1@example.com', 'Order #o0000000-0004 Cancelled',  'Your payment was declined. Order cancelled.', 'SENT', NOW() - INTERVAL '3 days'),
-  (uuid_generate_v4(), 'o0000000-0000-0000-0000-000000000005', 'a0000000-0000-0000-0000-000000000005', 'EMAIL', 'customer2@example.com', 'Order #o0000000-0005 Shipped',    'Your order shipped via UPS #1Z999.',   'SENT', NOW() - INTERVAL '6 hours')
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Confirmed',  'Your order has been confirmed.',        'SENT', NOW() - INTERVAL '2 days'),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Shipped',    'Your order is on its way!',             'SENT', NOW() - INTERVAL '1 day'),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000006', 'EMAIL', 'customer3@example.com', 'Order #o0000000-0001 Delivered',  'Your order has been delivered.',        'SENT', NOW() - INTERVAL '12 hours'),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000005', 'EMAIL', 'customer2@example.com', 'Order #o0000000-0002 Confirmed',  'Your order has been confirmed.',        'SENT', NOW() - INTERVAL '1 day'),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000004', 'EMAIL', 'customer1@example.com', 'Order #o0000000-0004 Cancelled',  'Your payment was declined. Order cancelled.', 'SENT', NOW() - INTERVAL '3 days'),
+  (uuid_generate_v4(), 'e0000000-0000-0000-0000-000000000005', 'a0000000-0000-0000-0000-000000000005', 'EMAIL', 'customer2@example.com', 'Order #o0000000-0005 Shipped',    'Your order shipped via UPS #1Z999.',   'SENT', NOW() - INTERVAL '6 hours')
 ON CONFLICT DO NOTHING;
 
 
@@ -400,8 +400,8 @@ INSERT INTO payments (id, order_id, user_id, amount, currency, status, method, i
 VALUES
   -- Order 001: COMPLETED (DELIVERED order)
   (
-    'p0000000-0000-0000-0000-000000000001',
-    'o0000000-0000-0000-0000-000000000001',
+    'f0000000-0000-0000-0000-000000000001',
+    'e0000000-0000-0000-0000-000000000001',
     'a0000000-0000-0000-0000-000000000006',
     329.97, 'USD', 'COMPLETED', 'MOCK_CARD',
     'idempotency-order-001-customer3',
@@ -409,8 +409,8 @@ VALUES
   ),
   -- Order 002: COMPLETED (CONFIRMED order)
   (
-    'p0000000-0000-0000-0000-000000000002',
-    'o0000000-0000-0000-0000-000000000002',
+    'f0000000-0000-0000-0000-000000000002',
+    'e0000000-0000-0000-0000-000000000002',
     'a0000000-0000-0000-0000-000000000005',
     99.99, 'USD', 'COMPLETED', 'MOCK_WALLET',
     'idempotency-order-002-customer2',
@@ -418,8 +418,8 @@ VALUES
   ),
   -- Order 003: PENDING (waiting for payment processing)
   (
-    'p0000000-0000-0000-0000-000000000003',
-    'o0000000-0000-0000-0000-000000000003',
+    'f0000000-0000-0000-0000-000000000003',
+    'e0000000-0000-0000-0000-000000000003',
     'a0000000-0000-0000-0000-000000000004',
     1419.97, 'USD', 'PENDING', 'MOCK_CARD',
     'idempotency-order-003-customer1',
@@ -427,8 +427,8 @@ VALUES
   ),
   -- Order 004: FAILED (CANCELLED order)
   (
-    'p0000000-0000-0000-0000-000000000004',
-    'o0000000-0000-0000-0000-000000000004',
+    'f0000000-0000-0000-0000-000000000004',
+    'e0000000-0000-0000-0000-000000000004',
     'a0000000-0000-0000-0000-000000000004',
     179.99, 'USD', 'FAILED', 'MOCK_CARD',
     'idempotency-order-004-customer1',
@@ -436,8 +436,8 @@ VALUES
   ),
   -- Order 005: COMPLETED (SHIPPED order)
   (
-    'p0000000-0000-0000-0000-000000000005',
-    'o0000000-0000-0000-0000-000000000005',
+    'f0000000-0000-0000-0000-000000000005',
+    'e0000000-0000-0000-0000-000000000005',
     'a0000000-0000-0000-0000-000000000005',
     54.99, 'USD', 'COMPLETED', 'MOCK_CARD',
     'idempotency-order-005-customer2',
@@ -448,17 +448,17 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO payment_history (payment_id, old_status, new_status, reason)
 VALUES
   -- Payment 001: PENDING → COMPLETED
-  ('p0000000-0000-0000-0000-000000000001', NULL,        'PENDING',   'Payment initiated'),
-  ('p0000000-0000-0000-0000-000000000001', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-7A3F9C2B'),
+  ('f0000000-0000-0000-0000-000000000001', NULL,        'PENDING',   'Payment initiated'),
+  ('f0000000-0000-0000-0000-000000000001', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-7A3F9C2B'),
   -- Payment 002: PENDING → COMPLETED
-  ('p0000000-0000-0000-0000-000000000002', NULL,        'PENDING',   'Payment initiated'),
-  ('p0000000-0000-0000-0000-000000000002', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-1D8E4A6F'),
+  ('f0000000-0000-0000-0000-000000000002', NULL,        'PENDING',   'Payment initiated'),
+  ('f0000000-0000-0000-0000-000000000002', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-1D8E4A6F'),
   -- Payment 003: PENDING (still in progress)
-  ('p0000000-0000-0000-0000-000000000003', NULL,        'PENDING',   'Payment initiated'),
+  ('f0000000-0000-0000-0000-000000000003', NULL,        'PENDING',   'Payment initiated'),
   -- Payment 004: PENDING → FAILED
-  ('p0000000-0000-0000-0000-000000000004', NULL,        'PENDING',   'Payment initiated'),
-  ('p0000000-0000-0000-0000-000000000004', 'PENDING',   'FAILED',    'Mock gateway declined: card number 4000000000000002'),
+  ('f0000000-0000-0000-0000-000000000004', NULL,        'PENDING',   'Payment initiated'),
+  ('f0000000-0000-0000-0000-000000000004', 'PENDING',   'FAILED',    'Mock gateway declined: card number 4000000000000002'),
   -- Payment 005: PENDING → COMPLETED
-  ('p0000000-0000-0000-0000-000000000005', NULL,        'PENDING',   'Payment initiated'),
-  ('p0000000-0000-0000-0000-000000000005', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-5B2C8D4E')
+  ('f0000000-0000-0000-0000-000000000005', NULL,        'PENDING',   'Payment initiated'),
+  ('f0000000-0000-0000-0000-000000000005', 'PENDING',   'COMPLETED', 'Mock gateway approved: GW-REF-5B2C8D4E')
 ON CONFLICT DO NOTHING;
