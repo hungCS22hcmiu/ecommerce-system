@@ -1,9 +1,10 @@
 # High-Throughput E-Commerce Platform — Technical Proposal
 
-**Version:** 3.0  
-**Date:** 2025  
-**Author:** Hung  
+**Version:** 4.0
+**Date:** 2026
+**Author:** Hung
 **Status:** Approved
+**Timeline:** 6-month execution plan (see `docs/six-month-plan.md`)
 
 ---
 
@@ -24,21 +25,23 @@
 13. [Deployment & Infrastructure](#13-deployment--infrastructure)
 14. [Testing Strategy](#14-testing-strategy)
 15. [Monitoring & Observability](#15-monitoring--observability)
-16. [Future Enhancements](#16-future-enhancements)
+16. [AI-Powered Product Search (RAG)](#16-ai-powered-product-search-rag)
+17. [Future Enhancements](#17-future-enhancements)
 
 ---
 
 ## 1. Executive Summary
 
-This document proposes a **distributed e-commerce platform** built with 5 microservices, leveraging the concurrency strengths of **Go** and the enterprise transaction capabilities of **Java/Spring Boot**. The system demonstrates production-grade patterns: event-driven architecture (Kafka), optimistic/pessimistic locking for race condition prevention, idempotent payment processing, Redis-first cart design, and circuit breaker resilience.
+This document proposes a **distributed e-commerce platform** built with 5 microservices + 1 AI sidecar, leveraging the concurrency strengths of **Go** and the enterprise transaction capabilities of **Java/Spring Boot**. The system demonstrates production-grade patterns: event-driven architecture (Kafka), optimistic/pessimistic locking for race condition prevention, idempotent payment processing, Redis-first cart design, circuit breaker resilience, and **RAG-powered semantic product search** using pgvector.
 
 **Why this matters for an internship application:**
 - Demonstrates understanding of **distributed systems** — not just CRUD
 - Shows mastery of **concurrency control** — goroutines, channels, `@Transactional` isolation levels, optimistic locking
 - Proves ability to choose the **right language for the right problem** — Go for I/O-heavy concurrent services, Java for complex business logic
-- Includes **cloud-ready deployment** — AWS and GCP deployment scenarios
+- Integrates **AI/ML practically** — RAG product search with pgvector, embedding pipeline, and a Python sidecar for model serving
+- Includes **cloud-ready deployment** — AWS (EC2, RDS, ElastiCache) with CI/CD via GitHub Actions
 
-**Architecture at a glance:** 5 microservices, Nginx reverse proxy, PostgreSQL, Redis, Kafka, React frontend — all containerized with Docker Compose. Cloud-deployable to AWS (EC2 + managed services) or GCP (Cloud Run serverless).
+**Architecture at a glance:** 5 microservices + AI embedding service, Nginx reverse proxy, PostgreSQL (with pgvector), Redis, Kafka — all containerized with Docker Compose. Deployed to AWS with RDS and ElastiCache managed services.
 
 ---
 
@@ -48,8 +51,7 @@ This document proposes a **distributed e-commerce platform** built with 5 micros
 
 ```
                                     ┌─────────────────────────────┐
-                                    │       React Frontend        │
-                                    │     (Vite + TypeScript)     │
+                                    │         Client / UI         │
                                     └────────────┬────────────────┘
                                                  │ HTTP
                                     ┌────────────▼────────────────┐
@@ -64,12 +66,21 @@ This document proposes a **distributed e-commerce platform** built with 5 micros
                    │   :8001     │ │  :8081     │ │ :8002   │ │ :8082   │ │   :8003     │
                    │             │ │+Inventory  │ │         │ │+Notify  │ │             │
                    │ goroutines  │ │@Version    │ │Redis 1st│ │Saga     │ │ idempotent  │
-                   │ channels    │ │@Transact.  │ │goroutin │ │Kafka    │ │ worker pool │
-                   └──────┬──────┘ └─┬─────────┘ └┬───┬────┘ └┬───┬───┘ └┬────────┬───┘
-                          │          │             │   │       │   │      │        │
-                   ┌──────▼──────────▼─────────────▼───┘       │   │      │        │
-                   │          PostgreSQL 15+                    │   │      │        │
+                   │ channels    │ │+AI Search  │ │goroutin │ │Kafka    │ │ worker pool │
+                   └──────┬──────┘ └─┬────┬────┘ └┬───┬────┘ └┬───┬───┘ └┬────────┬───┘
+                          │          │    │        │   │       │   │      │        │
+                          │          │    │ HTTP   │   │       │   │      │        │
+                          │          │  ┌─▼──────────┐│       │   │      │        │
+                          │          │  │ AI Service ││       │   │      │        │
+                          │          │  │ (Python)   ││       │   │      │        │
+                          │          │  │ :8004      ││       │   │      │        │
+                          │          │  │ sentence-  ││       │   │      │        │
+                          │          │  │ transformers││       │   │      │        │
+                          │          │  └────────────┘│       │   │      │        │
+                   ┌──────▼──────────▼────────────────▼───┘   │   │      │        │
+                   │     PostgreSQL 15+ (with pgvector)        │   │      │        │
                    │  (5 logical DBs, connection pooling)       │   │      │        │
+                   │  Products table includes vector(384) col   │   │      │        │
                    └───────────────────────────────────────────┘   │      │        │
                                                                    │      │        │
                    ┌───────────────────────────────────────────────▼──────▼────────┘
@@ -88,17 +99,21 @@ This document proposes a **distributed e-commerce platform** built with 5 micros
 | Service | Language | Port | Bounded Context |
 |---|---|---|---|
 | User Service | Golang | 8001 | Authentication, Authorization, User profiles |
-| Product Service | Java/Spring Boot | 8081 | Product catalog, Search, **Inventory & stock management** |
+| Product Service | Java/Spring Boot | 8081 | Product catalog, Search, **Inventory & stock management**, **AI search orchestration** |
 | Cart Service | Golang | 8002 | Shopping cart lifecycle, Redis-backed storage |
 | Order Service | Java/Spring Boot | 8082 | Order lifecycle, State machine, Kafka events, **inline notifications** |
 | Payment Service | Golang | 8003 | Payment processing, Idempotency, Refunds |
+| AI Service | Python/FastAPI | 8004 | Embedding generation (sentence-transformers), model serving sidecar |
 
 **Nginx** acts as the reverse proxy (not a custom service) — handles routing, rate limiting, CORS, and TLS termination via configuration only.
 
+**AI Service** is a lightweight Python sidecar — not a full microservice. It exposes a single `POST /embed` endpoint used by Product Service for query embedding. Product data embeddings are generated offline via a batch script.
+
 ### 2.3 Communication Patterns
 
-- **Synchronous (REST/HTTP):** Client requests routed through Nginx; inter-service queries (e.g., Cart → Product for price/stock validation).
+- **Synchronous (REST/HTTP):** Client requests routed through Nginx; inter-service queries (e.g., Cart → Product for price/stock validation, Product → AI Service for query embedding).
 - **Asynchronous (Kafka):** Event-driven workflows for order→payment→confirmation saga.
+- **Sidecar (internal HTTP):** Product Service → AI Service for embedding generation (not exposed externally).
 
 ---
 
@@ -215,6 +230,7 @@ public Order createOrder(CreateOrderRequest request) {
 | Technology | Version | Purpose |
 |---|---|---|
 | **PostgreSQL** | 15+ | Primary relational database (1 instance, 5 logical databases) |
+| **pgvector** | 0.7+ | PostgreSQL extension for vector similarity search (AI product search) |
 | **Redis** | 7+ | Session caching, cart storage, token blacklist, product caching |
 
 ### 3.5 Messaging & Infrastructure
@@ -226,7 +242,27 @@ public Order createOrder(CreateOrderRequest request) {
 | **Docker** | 24+ | Containerization of all services |
 | **Docker Compose** | 2.x | Local development orchestration |
 
-### 3.6 Supporting Libraries
+### 3.6 AI/ML Stack
+
+| Technology | Version | Purpose | Justification |
+|---|---|---|---|
+| **Python** | 3.11+ | AI embedding service | De facto ML ecosystem language |
+| **FastAPI** | 0.100+ | Embedding API server | Async, fast, auto-generated docs |
+| **sentence-transformers** | 2.x | Embedding model (`all-MiniLM-L6-v2`) | Free, local, 384-dimension vectors, fast inference |
+| **pgvector** | 0.7+ | Vector similarity search in PostgreSQL | No extra infrastructure — reuses existing Postgres |
+
+**Why pgvector over a dedicated vector DB (Pinecone, Weaviate)?**
+- Zero new infrastructure — pgvector is a PostgreSQL extension, deployed alongside existing product data
+- Supports HNSW and IVFFlat indexes for approximate nearest neighbor search
+- SQL-native: combine vector similarity with WHERE clauses (price range, category) in a single query
+- Sufficient for catalog sizes up to ~1M products; for larger scale, migrate to a dedicated vector DB
+
+**Why a Python sidecar instead of embedding in Java?**
+- sentence-transformers ecosystem is Python-native — no mature Java equivalent
+- Keeps ML concerns isolated: model updates don't require redeploying product-service
+- Realistic architecture — production systems commonly serve ML models from separate processes
+
+### 3.7 Supporting Libraries
 
 | Library | Language | Purpose |
 |---|---|---|
@@ -245,6 +281,9 @@ public Order createOrder(CreateOrderRequest request) {
 | TestContainers | Java | Integration test databases |
 | Lombok | Java | Boilerplate reduction |
 | Flyway | Java | Database migration versioning |
+| `sentence-transformers` | Python | Text embedding model loading and inference |
+| `uvicorn` | Python | ASGI server for FastAPI |
+| `psycopg2` | Python | PostgreSQL driver for batch embedding script |
 
 ---
 
@@ -274,6 +313,8 @@ public Order createOrder(CreateOrderRequest request) {
 | `/api/v1/orders/*` | `http://order-service:8082` |
 | `/api/v1/payments/*` | `http://payment-service:8003` |
 | `/swagger/*` | Static files |
+
+> **Note:** The AI Service (:8004) is NOT exposed through Nginx. It is an internal sidecar called only by Product Service within the Docker network.
 
 **Why Nginx instead of a custom gateway:**
 - Zero application code to maintain
@@ -397,7 +438,7 @@ Merging inventory into Product Service eliminates an inter-service call on every
 
 | Table | Key Columns |
 |---|---|
-| `products` | id, name, description, price (DECIMAL(10,2)), category_id (FK), seller_id, status (ACTIVE/INACTIVE/DELETED), stock_quantity, stock_reserved, version (optimistic lock), created_at, updated_at |
+| `products` | id, name, description, price (DECIMAL(10,2)), category_id (FK), seller_id, status (ACTIVE/INACTIVE/DELETED), stock_quantity, stock_reserved, version (optimistic lock), **embedding vector(384)**, created_at, updated_at |
 | `categories` | id, name, slug, parent_id (self-referencing for hierarchy), sort_order |
 | `product_images` | id, product_id (FK), url, alt_text, sort_order |
 | `stock_movements` | id, product_id (FK), type (IN/OUT/RESERVE/RELEASE), quantity, reference_id, reason, created_at |
@@ -420,6 +461,7 @@ Merging inventory into Product Service eliminates an inter-service call on every
 | DELETE | `/api/v1/products/{id}` | Admin | Soft-delete product (set status=DELETED) |
 | GET | `/api/v1/products` | Public | List products with pagination, filters, sorting |
 | GET | `/api/v1/products/search?q={query}` | Public | Full-text search with relevance ranking |
+| GET | `/api/v1/products/ai-search?q={query}` | Public | **Semantic search via RAG** — embeds query, pgvector similarity, falls back to keyword search |
 | GET | `/api/v1/categories` | Public | List all categories (tree structure) |
 | GET | `/api/v1/categories/{id}/products` | Public | List products in a category |
 
@@ -1099,11 +1141,103 @@ payment-service/
 
 ---
 
+### 4.7 AI Embedding Service (Python/FastAPI) — Sidecar
+
+**Responsibility:** Text-to-vector embedding for semantic product search. This is a **sidecar service**, not a full microservice — it has no database, no state, and a single endpoint.
+
+**Why a separate service instead of embedding in Product Service?**
+- Python is the only language with mature support for `sentence-transformers` and Hugging Face models
+- Isolates ML model lifecycle (model updates don't require redeploying product-service)
+- Matches real-world architecture where ML models are served separately from application services
+
+**Embedding Model:** `all-MiniLM-L6-v2` (sentence-transformers)
+- **Dimensions:** 384
+- **Model size:** ~80MB
+- **Inference time:** ~5ms per query on CPU
+- **Trade-off:** Smaller and faster than `all-mpnet-base-v2` (768 dims), sufficient quality for product search
+
+**API Endpoint:**
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| POST | `/embed` | Internal | Convert text to embedding vector |
+| GET | `/health` | Internal | Health check (model loaded?) |
+
+**Request/Response:**
+```json
+// POST /embed
+// Request:
+{ "text": "comfortable running shoes for long distance" }
+
+// Response:
+{ "embedding": [0.023, -0.041, 0.087, ...], "model": "all-MiniLM-L6-v2", "dimensions": 384 }
+```
+
+**How Product Service Uses It (AI Search Flow):**
+```
+1. User sends: GET /api/v1/products/ai-search?q=comfortable+lightweight+shoes
+2. Product Service receives the query
+3. Product Service calls AI Service: POST http://ai-service:8004/embed {"text": "comfortable lightweight shoes"}
+4. AI Service returns: {"embedding": [0.023, -0.041, ...]}
+5. Product Service runs pgvector query:
+   SELECT id, name, price, 1 - (embedding <=> $1) AS similarity
+   FROM products
+   WHERE status = 'ACTIVE'
+   ORDER BY embedding <=> $1
+   LIMIT 20
+6. Product Service returns ranked results to client
+```
+
+**Fallback:** If AI Service is unavailable (circuit breaker open), Product Service falls back to PostgreSQL full-text search (`GET /api/v1/products/search`).
+
+**Batch Embedding Pipeline:**
+```python
+# scripts/embed_products.py — Run offline to embed all existing products
+# Concatenates: name + " " + description + " " + category_name
+# Embeds each product and UPDATEs the embedding column
+# Run on: initial data load, nightly cron, or after bulk product imports
+```
+
+**Project Structure:**
+```
+ai-service/
+├── main.py              # FastAPI app with /embed and /health endpoints
+├── requirements.txt     # sentence-transformers, fastapi, uvicorn
+├── Dockerfile           # Python 3.11-slim, downloads model on build
+└── scripts/
+    └── embed_products.py  # Batch embedding pipeline (connects to PostgreSQL)
+```
+
+**Docker Compose Addition:**
+```yaml
+ai-service:
+  build:
+    context: ./ai-service
+    dockerfile: Dockerfile
+  container_name: ecommerce-ai-service
+  ports:
+    - "8004:8004"
+  environment:
+    MODEL_NAME: all-MiniLM-L6-v2
+    PORT: "8004"
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s  # Model loading takes ~30s on first start
+  networks:
+    - backend
+```
+
+---
+
 ## 5. Database Design
 
 ### 5.1 Strategy
 
 - **Database-per-service:** One PostgreSQL instance with 5 logical databases. Each service connects with its own credentials and can only access its own database.
+- **pgvector extension:** Enabled on `ecommerce_products` database for vector similarity search (`CREATE EXTENSION vector`).
 - **Normalization:** All schemas follow 3NF. Denormalization only where justified (e.g., `product_name` in `cart_items` and `order_items` to avoid cross-service joins).
 - **Migrations:** Flyway for Java services (versioned SQL files); GORM AutoMigrate for Go services (development), manual SQL migrations for production.
 - **UUIDs:** All primary keys use UUID v4 to avoid sequential ID leakage and simplify distributed ID generation.
@@ -1145,6 +1279,7 @@ payment-service/
 | `orders` | `status` | B-TREE | Order filtering by state |
 | `payments` | `idempotency_key` | UNIQUE | Duplicate prevention — critical for payment safety |
 | `payments` | `order_id` | B-TREE | Payment lookup by order |
+| `products` | `embedding` | HNSW (pgvector) | Approximate nearest neighbor for AI search (cosine distance) |
 | `stock_movements` | `product_id` | B-TREE | Audit trail queries |
 
 ---
@@ -1231,6 +1366,7 @@ Full API specification authored in **OpenAPI 3.0**:
 | Order Service | Product Service | Reserve stock at order creation | Retry 3x, then fail order with clear error |
 | Order Service | Product Service | Release stock on cancellation | Retry with DLQ fallback |
 | Order Service | Product Service | Confirm stock deduction on payment success | Retry with DLQ fallback |
+| Product Service | AI Service | Embed search query for vector similarity search | Circuit breaker + fallback to keyword search |
 
 ### 7.2 Asynchronous (Kafka Events)
 
@@ -1337,6 +1473,7 @@ Full API specification authored in **OpenAPI 3.0**:
 | `category:list` | All categories JSON | 30 min | Product Service |
 | `cart:{userId}` | Cart JSON with items | 30 min (extended on write) | Cart Service |
 | `idempotency:{key}` | Payment result JSON | 24 hours | Payment Service |
+| `ai_search:{queryHash}` | Search result JSON | 5 min | Product Service (AI search result cache) |
 
 ### 8.3 Cache Invalidation
 
@@ -1444,6 +1581,7 @@ This section consolidates all concurrency challenges and their solutions. This i
 | **Cart item lost update** | Cart Service (Redis) | 🟡 High | Redis `WATCH/MULTI/EXEC` optimistic lock |
 | **Login attempt race** | User Service | 🟡 High | `SELECT ... FOR UPDATE` on user row |
 | **Cache stampede** | Product Service | 🟡 High | Single-flight pattern (singleflight package) |
+| **AI search cache stampede** | Product Service | 🟢 Medium | Redis cache on query hash (5 min TTL) + singleflight |
 | **Kafka duplicate delivery** | Payment Service | 🟡 High | Idempotency key prevents reprocessing |
 | **Token blacklist race** | User Service | 🟢 Medium | Redis SET is atomic — no race |
 | **Background cart sync** | Cart Service | 🟢 Medium | Channel-based serialization |
@@ -1702,7 +1840,8 @@ void testConcurrentStockReservation() throws Exception {
 | Concurrent users | 10,000 | Go goroutines + Java virtual threads |
 | Kafka throughput | 1,000 events/second | Partitioned topics + worker pool consumers |
 | Availability | 99.9% | Health checks, graceful shutdown, DLQ |
-| Product search | < 500ms for full-text queries | GIN index on PostgreSQL |
+| Product search (keyword) | < 500ms for full-text queries | GIN index on PostgreSQL |
+| Product search (AI/semantic) | < 800ms end-to-end | Embedding (~5ms) + pgvector HNSW index + result cache |
 | Cart operations | < 50ms (Redis-backed) | Redis-first architecture, no DB on hot path |
 
 ### 11.2 Go-Specific Performance Optimizations
@@ -1838,10 +1977,11 @@ SELECT pg_reload_conf();
 - **Tool:** k6 (https://k6.io/)
 - **Profile:** Ramp to 100 VUs over 2 min → sustain 5 min → ramp down 2 min
 - **Scenarios:**
-  1. Product listing + search (read-heavy, expect p95 < 500ms)
-  2. Add to cart + update (mixed read/write, expect p95 < 200ms)
-  3. Full checkout flow (write-heavy, multi-service, expect p95 < 2s)
-  4. Concurrent stock reservation — 200 VUs reserving same product (contention test)
+  1. Product listing + keyword search (read-heavy, expect p95 < 500ms)
+  2. AI semantic search (read-heavy, expect p95 < 800ms including embedding)
+  3. Add to cart + update (mixed read/write, expect p95 < 200ms)
+  4. Full checkout flow (write-heavy, multi-service, expect p95 < 2s)
+  5. Concurrent stock reservation — 200 VUs reserving same product (contention test)
 - **Results:** Documented in `docs/load-test-results.md` with before/after comparisons
 
 ---
@@ -1990,122 +2130,101 @@ Pull Request                              Push to main
                                        └──────────┘
 ```
 
-### 13.4 Cloud Deployment — AWS & GCP Scenarios
+### 13.4 Cloud Deployment — AWS (Primary)
 
-> **Is AWS free?** AWS has a **12-month Free Tier** for new accounts with limited resources. It's not permanently free — after 12 months, you pay full price. GCP offers **$300 in credits for 90 days** for new accounts, plus some "Always Free" resources. Neither is truly free for running 5 microservices long-term, but both are very affordable.
-
-#### Scenario A: AWS Deployment (Free Tier → ~$0–30/month first year)
+**Strategy:** Deploy to AWS using EC2 + managed services (RDS, ElastiCache). Self-host Kafka on EC2 to avoid MSK costs. This is the simplest path that demonstrates real cloud deployment.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     AWS Architecture                         │
 │                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              EC2 t2.micro (Free Tier)                 │   │
-│  │              1 vCPU · 1GB RAM · Docker Compose        │   │
-│  │  ┌─────┐ ┌──────┐ ┌─────┐ ┌──────┐ ┌───────┐       │   │
-│  │  │User │ │Prod. │ │Cart │ │Order │ │Payment│       │   │
-│  │  │:8001│ │:8081 │ │:8002│ │:8082 │ │:8003  │       │   │
-│  │  └─────┘ └──────┘ └─────┘ └──────┘ └───────┘       │   │
-│  │  ┌──────────┐  ┌────────────────────────┐            │   │
-│  │  │  Nginx   │  │  Kafka+Zookeeper       │            │   │
-│  │  │  :80     │  │  (self-hosted in Docker)│            │   │
-│  │  └──────────┘  └────────────────────────┘            │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                          │                                   │
-│  ┌───────────────────────▼──────────────────────────────┐   │
-│  │  RDS db.t3.micro PostgreSQL (Free Tier)               │   │
-│  │  20GB storage · 750 hours/month free                  │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  ElastiCache cache.t3.micro Redis (Free Tier)         │   │
-│  │  750 hours/month free                                 │   │
-│  └──────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  VPC (public + private subnets)                          ││
+│  │                                                          ││
+│  │  ┌────────────────────────────────────────────────────┐ ││
+│  │  │  EC2 t3.small (Public Subnet)                       │ ││
+│  │  │  2 vCPU · 2GB RAM · Docker Compose                  │ ││
+│  │  │  ┌─────┐ ┌──────┐ ┌─────┐ ┌──────┐ ┌───────┐     │ ││
+│  │  │  │User │ │Prod. │ │Cart │ │Order │ │Payment│     │ ││
+│  │  │  │:8001│ │:8081 │ │:8002│ │:8082 │ │:8003  │     │ ││
+│  │  │  └─────┘ └──────┘ └─────┘ └──────┘ └───────┘     │ ││
+│  │  │  ┌──────┐ ┌────────────────────┐ ┌──────────┐     │ ││
+│  │  │  │Nginx │ │Kafka+ZK (Docker)   │ │AI Service│     │ ││
+│  │  │  │ :80  │ │(self-hosted)       │ │ :8004    │     │ ││
+│  │  │  └──────┘ └────────────────────┘ └──────────┘     │ ││
+│  │  └────────────────────────────────────────────────────┘ ││
+│  │                          │                               ││
+│  │  ┌───────────────────────▼───────────────────────────┐  ││
+│  │  │  RDS db.t3.micro PostgreSQL + pgvector             │  ││
+│  │  │  (Private Subnet — not exposed to internet)        │  ││
+│  │  │  20GB storage · automated backups                  │  ││
+│  │  └───────────────────────────────────────────────────┘  ││
+│  │  ┌───────────────────────────────────────────────────┐  ││
+│  │  │  ElastiCache cache.t3.micro Redis                  │  ││
+│  │  │  (Private Subnet)                                  │  ││
+│  │  └───────────────────────────────────────────────────┘  ││
+│  └─────────────────────────────────────────────────────────┘│
 │                                                              │
-│  Security Group: SSH (your IP), HTTP/HTTPS (0.0.0.0/0)      │
+│  Security Groups:                                            │
+│  - EC2: SSH (your IP only), HTTP/HTTPS (0.0.0.0/0)         │
+│  - RDS: PostgreSQL 5432 (EC2 SG only)                       │
+│  - ElastiCache: Redis 6379 (EC2 SG only)                    │
+│                                                              │
+│  GitHub Actions → ECR → SSH deploy to EC2                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-| AWS Resource | Free Tier | After Free Tier | Notes |
+| AWS Resource | Free Tier (12 months) | After Free Tier | Notes |
 |---|---|---|---|
-| EC2 t2.micro | 750 hrs/month (12 months) | ~$8.50/month | 1 vCPU, 1GB RAM — tight for 5 services |
-| EC2 t3.small (recommended) | NOT free | ~$15/month | 2 vCPU, 2GB RAM — comfortable for Docker Compose |
-| RDS PostgreSQL db.t3.micro | 750 hrs/month (12 months) | ~$13/month | 20GB SSD, automated backups |
-| ElastiCache Redis cache.t3.micro | 750 hrs/month (12 months) | ~$12/month | 0.5GB, single-node |
-| MSK (Kafka) | ❌ NOT free | ~$100+/month | Too expensive — self-host Kafka on EC2 instead |
-| **Total (first year)** | **~$0–15/month** | **~$48/month** | Self-host Kafka to stay cheap |
+| EC2 t3.small (recommended) | NOT free | ~$15/month | 2 vCPU, 2GB RAM — fits all containers |
+| RDS PostgreSQL db.t3.micro | 750 hrs/month free | ~$13/month | 20GB SSD, pgvector extension supported |
+| ElastiCache Redis cache.t3.micro | 750 hrs/month free | ~$12/month | 0.5GB, single-node |
+| ECR (Docker registry) | 500MB free | ~$1/month | Stores Docker images for CI/CD |
+| MSK (Kafka) | NOT free | ~$100+/month | Too expensive — self-host Kafka on EC2 |
+| **Total (first year)** | **~$15/month** | **~$41/month** | Self-host Kafka to stay cheap |
 
 **AWS Deployment Steps:**
 ```bash
-# 1. Launch EC2 instance (t3.small recommended)
-# 2. SSH into instance
-ssh -i key.pem ec2-user@<public-ip>
+# 1. Create VPC with public + private subnets
+# 2. Create RDS PostgreSQL in private subnet (enable pgvector extension)
+# 3. Create ElastiCache Redis in private subnet
+# 4. Launch EC2 t3.small in public subnet
 
-# 3. Install Docker & Docker Compose
+# 5. SSH into instance and install Docker
+ssh -i key.pem ec2-user@<public-ip>
 sudo yum update -y && sudo yum install docker -y
 sudo service docker start
 sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
 
-# 4. Clone repo and start
-git clone https://github.com/hungCS22hcmiu/ecommrece-system.git
-cd ecommrece-system
+# 6. Clone repo and configure
+git clone https://github.com/hungCS22hcmiu/ecommerce-system.git
+cd ecommerce-system
+cp .env.example .env
+# Edit .env: point DB_HOST to RDS endpoint, REDIS_HOST to ElastiCache endpoint
 
-# 5. Update .env to point to RDS and ElastiCache (if using managed services)
-# Or just use Docker Compose with all containers on the EC2 instance
+# 7. Start services (Postgres/Redis containers removed — using managed services)
+docker-compose -f docker-compose.prod.yml up --build -d
 
-docker-compose up --build -d
+# 8. Run embedding pipeline for AI search
+docker exec ecommerce-ai-service python scripts/embed_products.py
 ```
 
-#### Scenario B: GCP Deployment (Free Credits → ~$0–25/month for 90 days)
+**RDS pgvector Setup:**
+```sql
+-- Connect to RDS PostgreSQL and enable pgvector
+CREATE EXTENSION IF NOT EXISTS vector;
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     GCP Architecture                         │
-│                                                              │
-│  Option 1: Single VM (like AWS)                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Compute Engine e2-small ($13/month, covered by $300) │   │
-│  │  2 vCPU · 2GB RAM · Docker Compose                    │   │
-│  │  (Same layout as AWS — all containers on one VM)      │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  Option 2: Cloud Run (Serverless — more impressive)          │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Cloud Run Services (2M free requests/month)          │   │
-│  │  ┌─────┐ ┌──────┐ ┌─────┐ ┌──────┐ ┌───────┐       │   │
-│  │  │User │ │Prod. │ │Cart │ │Order │ │Payment│       │   │
-│  │  │ Run │ │ Run  │ │ Run │ │ Run  │ │ Run   │       │   │
-│  │  └─────┘ └──────┘ └─────┘ └──────┘ └───────┘       │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Cloud SQL PostgreSQL ($7/month, smallest)            │   │
-│  │  Memorystore Redis ($30/month) or self-host on VM     │   │
-│  │  Pub/Sub (instead of Kafka — simpler, serverless)     │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+-- Verify
+SELECT * FROM pg_extension WHERE extname = 'vector';
 ```
 
-| GCP Resource | Free Tier / Credits | Cost After Credits | Notes |
-|---|---|---|---|
-| $300 credit (90 days) | Covers everything below | — | Great for initial development |
-| e2-micro | Always free (1 instance) | $0 | 0.25 vCPU, 1GB — too small for 5 services |
-| e2-small | Covered by credits | ~$13/month | 2 vCPU, 2GB — good for Docker Compose |
-| Cloud Run | 2M requests/month free | Pay-per-use | Serverless — auto-scales to zero |
-| Cloud SQL (PostgreSQL) | Covered by credits | ~$7/month | Smallest instance |
-| Memorystore (Redis) | Covered by credits | ~$30/month | Expensive — consider self-hosting |
-| Pub/Sub | 10GB/month free | Pay-per-use | Alternative to Kafka (simpler, managed) |
-| **Total (with credits)** | **~$0/month** | **~$50/month** | Cloud Run is cheapest long-term |
+**CI/CD Pipeline (GitHub Actions → AWS):**
+```
+Push to main → Run tests → Build Docker images → Push to ECR → SSH deploy to EC2
+```
+See `docs/six-month-plan.md` Week 23 for full CI/CD implementation details.
 
-**Recommendation for this project:**
-| Criteria | AWS | GCP | Winner |
-|---|---|---|---|
-| Cheapest first year | $0–15/month (free tier) | $0 for 90 days ($300 credit) | 🏆 GCP (first 3 months) |
-| Cheapest long-term | ~$48/month | ~$50/month (VM) or ~$30/month (Cloud Run) | 🏆 GCP Cloud Run |
-| Simplest deployment | Docker Compose on EC2 | Docker Compose on Compute Engine | Tie |
-| Most impressive for interview | ECS/EKS (complex but looks good) | Cloud Run (serverless) | 🏆 GCP Cloud Run |
-| Kafka support | MSK ($100+) or self-host | Pub/Sub (managed, cheaper) | 🏆 GCP Pub/Sub |
-
-**Our recommendation:** Start with **Docker Compose on a single VM** (works on both AWS and GCP). For the interview demo, deploy to **GCP Cloud Run** — it's serverless, auto-scales, and sounds impressive.
+**Alternative: GCP** — GCP Cloud Run is a viable alternative (serverless, auto-scales to zero, $300 free credit for 90 days). If AWS costs are a concern, GCP Compute Engine + Cloud SQL is functionally equivalent. The architecture is cloud-agnostic by design (Docker Compose).
 
 ---
 
@@ -2134,6 +2253,8 @@ docker-compose up --build -d
 | Order → Payment success → stock confirmed | E2E | Full Kafka saga, idempotency |
 | Order → Payment failure → stock released | E2E | Compensation logic |
 | Circuit breaker opens after Product Service failure | Integration | Fallback behavior |
+| AI search: "comfortable shoes" returns running shoes (not just keyword match) | Integration | Semantic search quality, pgvector correctness |
+| AI search fallback: AI service down → keyword search works | Integration | Circuit breaker + graceful degradation |
 | Rate limiting (burst 150 requests) | Integration | Nginx rejects excess with 429 |
 | Expired JWT rejected, blacklisted JWT rejected | Unit | Token validation completeness |
 
@@ -2194,22 +2315,129 @@ Every service exposes `/health/live` and `/health/ready`. Nginx aggregates:
 
 ---
 
-## 16. Future Enhancements
+## 16. AI-Powered Product Search (RAG)
 
-Out of scope for the initial release, prioritized by impact:
+This section details the RAG (Retrieval-Augmented Generation) architecture for semantic product search — the AI differentiator feature of this project.
+
+### 16.1 Why RAG for Product Search?
+
+Traditional keyword search fails on natural language queries:
+
+| Query | Keyword Search (`LIKE` / GIN) | Semantic Search (pgvector) |
+|---|---|---|
+| "comfortable shoes for long walks" | Matches only if "comfortable", "shoes", "long", "walks" appear literally | Finds running shoes, hiking boots, walking shoes — understands intent |
+| "affordable laptop for students" | Matches "affordable" and "laptop" literally | Finds budget laptops, Chromebooks, education deals — understands context |
+| "gift for a 5-year-old" | Matches "gift" and "5-year-old" literally (unlikely in product descriptions) | Finds toys, games, children's items — understands the concept |
+
+Semantic search uses **vector embeddings** to capture meaning, not just keywords.
+
+### 16.2 Architecture
+
+```
+                    ┌────────────────────────────┐
+                    │  GET /products/ai-search    │
+                    │  ?q=comfortable+shoes       │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │      Product Service        │
+                    │  1. Check Redis cache        │
+                    │     (ai_search:{queryHash})  │
+                    └─────────────┬──────────────┘
+                          cache miss
+                    ┌─────────────▼──────────────┐
+                    │      AI Service (Python)    │
+                    │  POST /embed                │
+                    │  → sentence-transformers     │
+                    │  → returns vector(384)       │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │      PostgreSQL + pgvector  │
+                    │  SELECT *, 1-(embedding     │
+                    │    <=> $1) AS similarity     │
+                    │  FROM products               │
+                    │  WHERE status = 'ACTIVE'     │
+                    │  ORDER BY embedding <=> $1   │
+                    │  LIMIT 20                    │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │  Return ranked products     │
+                    │  + cache in Redis (5 min)   │
+                    └────────────────────────────┘
+```
+
+### 16.3 Embedding Pipeline
+
+**Offline (batch):** Run `scripts/embed_products.py` to embed all existing products.
+```
+For each product:
+  text = f"{name} {description} {category_name}"
+  embedding = model.encode(text)  # → float[384]
+  UPDATE products SET embedding = $1 WHERE id = $2
+```
+
+**Online (incremental):** When a product is created or updated, re-embed it. Simple approach: cron job re-runs the batch script nightly. Production approach: product-service publishes a `products.updated` event, a consumer re-embeds.
+
+### 16.4 pgvector Index Strategy
+
+```sql
+-- HNSW index for approximate nearest neighbor (faster, slight accuracy trade-off)
+CREATE INDEX idx_products_embedding ON products
+  USING hnsw (embedding vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+-- Query performance:
+-- Without index (exact search): ~50ms for 10K products, ~500ms for 100K
+-- With HNSW index (approximate): ~5ms for 10K products, ~10ms for 100K
+```
+
+### 16.5 Combined Search (Vector + Filters)
+
+```sql
+-- Combine semantic similarity with traditional filters
+SELECT id, name, price, 1 - (embedding <=> $1) AS similarity
+FROM products
+WHERE status = 'ACTIVE'
+  AND category_id = $2          -- optional category filter
+  AND price BETWEEN $3 AND $4   -- optional price range
+ORDER BY embedding <=> $1
+LIMIT 20;
+```
+
+This is the power of pgvector over dedicated vector DBs — vector similarity and SQL filters in a single query.
+
+### 16.6 What I Must Understand Deeply (AI Section)
+
+| Understand Deeply | OK to Use AI Assistance |
+|---|---|
+| How text → vector embedding works conceptually | sentence-transformers API usage |
+| Cosine similarity vs Euclidean distance (and when to use each) | pgvector SQL syntax |
+| Why 384 dimensions, what trade-offs with 768 or 1536 | FastAPI boilerplate |
+| HNSW index: how it works (graph-based ANN), why it's O(log n) | Dockerfile for Python service |
+| When pgvector is insufficient (>1M products → dedicated vector DB) | Batch script plumbing |
+
+---
+
+## 17. Future Enhancements
+
+Out of scope for the 6-month plan, prioritized by impact:
 
 | Priority | Enhancement | Description | Effort |
 |---|---|---|---|
-| 🔴 P1 | **Minimal Frontend** | React/Vite: Login, Product list, Cart, Checkout (4 pages) | 3–4 days |
-| 🔴 P1 | **Cloud Deployment** | Deploy to GCP Cloud Run or AWS EC2 | 2 days |
-| 🟡 P2 | **Elasticsearch** | Replace PostgreSQL full-text search for better relevance | 2–3 days |
+| 🟡 P2 | **Minimal Frontend** | React/Vite: Login, Product list, Cart, Checkout (4 pages) | 3–4 days |
+| 🟡 P2 | **Elasticsearch** | Replace PostgreSQL full-text search for better relevance + combine with vector search | 2–3 days |
 | 🟡 P2 | **WebSocket Notifications** | Real-time order status updates to client | 2 days |
-| 🟡 P2 | **GCP Pub/Sub** | Replace Kafka with managed Pub/Sub for serverless deployment | 1–2 days |
 | 🟢 P3 | **Admin Dashboard** | Product/order management UI | 3–4 days |
 | 🟢 P3 | **Prometheus + Grafana** | Metrics collection and dashboards | 2 days |
-| 🟢 P3 | **GraphQL API Layer** | Alternative to REST for flexible client queries | 2–3 days |
+| 🟢 P3 | **LLM-Augmented Search** | Add an LLM layer on top of RAG results to generate natural language product recommendations | 2–3 days |
+| 🟢 P3 | **Dedicated Vector DB** | Migrate from pgvector to Pinecone/Weaviate for >1M product scale | 2–3 days |
 | ⚪ P4 | **Service Mesh (Istio)** | Advanced traffic management, mTLS | 2–3 days |
 | ⚪ P4 | **Kubernetes (K8s)** | Container orchestration for production scale | 3–4 days |
+| ⚪ P4 | **GCP Cloud Run** | Alternative serverless deployment (auto-scales to zero) | 1–2 days |
+
+**Note:** Cloud deployment (AWS), CI/CD (GitHub Actions), and AI search (RAG/pgvector) are now **in scope** — see `docs/six-month-plan.md` for implementation schedule.
 
 ---
 
@@ -2218,28 +2446,43 @@ Out of scope for the initial release, prioritized by impact:
 ```
 ecommerce-system/
 ├── user-service/           # Golang — authentication, profiles
-├── product-service/        # Java/Spring Boot — catalog, search, inventory
+├── product-service/        # Java/Spring Boot — catalog, search, inventory, AI search orchestration
 ├── cart-service/           # Golang — shopping cart (Redis-backed)
 ├── order-service/          # Java/Spring Boot — order lifecycle, notifications
 ├── payment-service/        # Golang — payment processing, idempotency
+├── ai-service/             # Python/FastAPI — embedding sidecar (sentence-transformers)
+│   ├── main.py             # /embed and /health endpoints
+│   ├── scripts/
+│   │   └── embed_products.py  # Batch embedding pipeline
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── nginx/
 │   └── nginx.conf          # Reverse proxy configuration
 ├── script/
-│   ├── init-databases.sql  # Create 5 logical databases
+│   ├── init-databases.sql  # Create 5 logical databases + pgvector extension
 │   ├── seed-data.sql       # Test data (products, users, categories)
+│   ├── e2e-test.sh         # End-to-end flow test script
 │   └── loadtest/           # k6 load test scripts
+├── .github/
+│   └── workflows/
+│       ├── ci.yml          # Lint → Test → Build on PR
+│       └── deploy.yml      # Build → Push ECR → Deploy EC2 on push to main
 ├── docs/
-│   ├── requirements.md
 │   ├── architecture.md
-│   ├── data-flows.md
 │   ├── use-case.md
-│   ├── load-test-results.md
-│   └── adr/
+│   ├── convention.md
+│   ├── development.md
+│   ├── testing.md
+│   ├── timeline.md         # Original 10-week roadmap
+│   ├── six-month-plan.md   # Extended 6-month execution plan
+│   └── adrs/
 │       ├── proposal.md     # ← This document
-│       └── preview.md      # Implementation roadmap
+│       └── locking-strategy.md  # Per-service concurrency decisions
 ├── api/
 │   └── openapi.yaml        # Full API specification
-├── docker-compose.yml
+├── docker-compose.yml      # Local development (all containers)
+├── docker-compose.prod.yml # Production (services + Kafka only, DB/Redis managed)
+├── keys/                   # RSA key pair for JWT (RS256)
 └── README.md
 ```
 
@@ -2286,7 +2529,31 @@ curl -X POST http://localhost/api/v1/auth/register \
 | Payment processing | — | — | — | ✅ Primary |
 | Login attempt counter | — | ✅ SELECT FOR UPDATE | ✅ Redis INCR | — |
 | Cache operations | — | — | ✅ Built-in | — |
+| AI search result cache | — | — | ✅ Redis SET (query hash key) | — |
 
 ---
 
-*This proposal is a living document. All architectural decisions are recorded as ADRs in `docs/adr/`. Version 3.0 adds dedicated concurrency/race condition analysis, cloud deployment scenarios, and language-specific performance optimization.*
+## Appendix D: AI Search Decision Record
+
+**Decision:** Use pgvector (PostgreSQL extension) for vector similarity search instead of a dedicated vector database.
+
+**Alternatives Considered:**
+| Option | Pros | Cons | Verdict |
+|---|---|---|---|
+| **pgvector** (chosen) | No new infrastructure, SQL-native, combines with WHERE clauses | Limited to ~1M vectors efficiently | Best for our scale |
+| **FAISS** (Facebook) | Fast, mature, free | In-memory only, no persistence, requires Python sidecar | Overkill for our needs |
+| **Pinecone** | Managed, scales infinitely | Costs money, another external dependency | Unnecessary complexity |
+| **Weaviate** | Open-source, built-in vectorization | Heavy (separate cluster), operational overhead | Too much for a learning project |
+
+**Embedding Model Selection:**
+| Model | Dimensions | Quality | Speed | Size |
+|---|---|---|---|---|
+| `all-MiniLM-L6-v2` (chosen) | 384 | Good | Fast (~5ms) | ~80MB |
+| `all-mpnet-base-v2` | 768 | Better | Medium (~15ms) | ~420MB |
+| OpenAI `text-embedding-3-small` | 1536 | Best | API latency | 0 (API) |
+
+**Rationale:** `all-MiniLM-L6-v2` is the best trade-off for a product catalog search use case — it's free, fast, runs locally, and produces quality embeddings. For interview purposes, understanding *how* embeddings work matters more than using the largest model.
+
+---
+
+*This proposal is a living document. All architectural decisions are recorded as ADRs in `docs/adrs/`. Version 4.0 adds AI-powered semantic search (RAG with pgvector), AWS-focused cloud deployment, CI/CD pipeline, and a 6-month execution plan.*
