@@ -22,9 +22,11 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/email"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
 )
 
 func main() {
@@ -112,7 +114,9 @@ func main() {
 	bl := blacklist.New(rdb)
 	sessionCache := session.New(rdb)
 	attemptCounter := loginattempt.New(rdb)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, privateKey, publicKey)
+	verificationStore := verification.New(rdb)
+	emailSender := email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, verificationStore, emailSender, privateKey, publicKey)
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMiddleware := middleware.Auth(publicKey, bl)
 
@@ -126,6 +130,8 @@ func main() {
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)
 		auth.POST("/refresh", authHandler.Refresh)
+		auth.POST("/verify-email", authHandler.VerifyEmail)
+		auth.POST("/resend-verification", authHandler.ResendVerification)
 
 		// Protected — require valid JWT
 		protected := v1.Group("/auth")

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -27,6 +28,8 @@ type UserRepository interface {
 	FindByIDWithProfile(ctx context.Context, id uuid.UUID) (*model.User, error)
 	// UpdateProfile updates first_name, last_name, phone on the user_profiles row.
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName, phone string) error
+	// UpdateVerificationStatus sets is_verified and verified_at on the users row.
+	UpdateVerificationStatus(ctx context.Context, userID uuid.UUID, verified bool) error
 }
 
 type userRepository struct {
@@ -105,4 +108,15 @@ func (r *userRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, fi
 			"last_name":  lastName,
 			"phone":      phone,
 		}).Error
+}
+
+func (r *userRepository) UpdateVerificationStatus(ctx context.Context, userID uuid.UUID, verified bool) error {
+	updates := map[string]any{"is_verified": verified}
+	if verified {
+		now := time.Now()
+		updates["verified_at"] = &now
+	}
+	return r.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", userID).
+		Updates(updates).Error
 }

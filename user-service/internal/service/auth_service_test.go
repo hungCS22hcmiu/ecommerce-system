@@ -80,6 +80,11 @@ func (m *mockUserRepo) UpdateProfile(ctx context.Context, userID uuid.UUID, firs
 	return args.Error(0)
 }
 
+func (m *mockUserRepo) UpdateVerificationStatus(ctx context.Context, userID uuid.UUID, verified bool) error {
+	args := m.Called(ctx, userID, verified)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func validRegisterRequest() dto.RegisterRequest {
@@ -222,14 +227,15 @@ func TestLogin_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	user := &model.User{
-		Email:    "john@example.com",
-		Role:     "customer",
-		IsLocked: false,
-		Profile:  &model.UserProfile{FirstName: "John", LastName: "Doe"},
+		Email:      "john@example.com",
+		Role:       "customer",
+		IsLocked:   false,
+		IsVerified: true,
+		Profile:    &model.UserProfile{FirstName: "John", LastName: "Doe"},
 	}
 	user.ID = userID
 
@@ -268,7 +274,7 @@ func TestLogin_UserNotFound_ReturnsErrInvalidCredentials(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	dbMock.ExpectBegin()
 	dbMock.ExpectCommit() // TX commits (no-op) — loginErr carries the auth error
@@ -287,7 +293,7 @@ func TestLogin_AccountLocked_ReturnsErrAccountLocked(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	user := &model.User{Email: "john@example.com", IsLocked: true}
@@ -310,7 +316,7 @@ func TestLogin_WrongPassword_ReturnsErrInvalidCredentials(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	// password hash for "correct-password", not "secret123"
@@ -345,7 +351,7 @@ func TestLogin_WrongPassword_AtMaxAttempts_ReturnsErrAccountLocked(t *testing.T)
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("correct-password")
@@ -380,7 +386,7 @@ func TestLogin_UpdateAttemptsError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
@@ -408,12 +414,12 @@ func TestLogin_CreateAuthTokenError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
 	require.NoError(t, err)
-	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsLocked: false, Role: "customer"}
+	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsLocked: false, IsVerified: true, Role: "customer"}
 	user.ID = userID
 
 	dbMock.ExpectBegin()
@@ -439,7 +445,7 @@ func TestRefresh_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	rawToken := "some-raw-refresh-token"
@@ -469,7 +475,7 @@ func TestRefresh_TokenNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
 		Return(nil, repository.ErrTokenNotFound)
@@ -484,7 +490,7 @@ func TestRefresh_DBError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	dbErr := errors.New("connection lost")
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
@@ -500,7 +506,7 @@ func TestRefresh_UserNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	authToken := &model.AuthToken{
@@ -552,7 +558,7 @@ func TestLogout_Success_BlacklistsJTIAndRevokesRefreshTokens(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey)
 
 	token := mintToken(t, privKey, userID.String())
 
@@ -570,7 +576,7 @@ func TestLogout_Success_BlacklistsJTIAndRevokesRefreshTokens(t *testing.T) {
 
 func TestLogout_InvalidToken_ReturnsErrInvalidToken(t *testing.T) {
 	_, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(nil, nil, nil, nil, nil, nil, nil, pubKey)
+	svc := service.NewAuthService(nil, nil, nil, nil, nil, nil, nil, nil, nil, pubKey)
 
 	err := svc.Logout(context.Background(), "not.a.valid.jwt")
 
@@ -581,7 +587,7 @@ func TestLogout_BlacklistError_ReturnsError(t *testing.T) {
 	bl := new(mockBlacklist)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, nil, nil, bl, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(nil, nil, nil, bl, nil, nil, nil, nil, privKey, pubKey)
 
 	token := mintToken(t, privKey, userID.String())
 	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(errors.New("redis down"))
@@ -597,7 +603,7 @@ func TestLogout_RevokeByUserIDError_ReturnsError(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, privKey, pubKey)
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey)
 
 	token := mintToken(t, privKey, userID.String())
 	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil)
@@ -665,7 +671,7 @@ func TestLogin_RedisPreCheck_BlocksAtMax(t *testing.T) {
 	counter := new(mockAttemptCounter)
 	privKey, pubKey := generateTestRSAKey(t)
 	// No DB needed — pre-check should abort before any DB call
-	svc := service.NewAuthService(nil, nil, nil, nil, nil, counter, privKey, pubKey)
+	svc := service.NewAuthService(nil, nil, nil, nil, nil, counter, nil, nil, privKey, pubKey)
 
 	counter.On("Get", mock.Anything, "john@example.com").Return(int64(5), nil)
 
@@ -681,7 +687,7 @@ func TestLogin_IncrementsRedisCounterOnBadPassword(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	counter := new(mockAttemptCounter)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, counter, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, counter, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("correct-password")
@@ -718,16 +724,17 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 	counter := new(mockAttemptCounter)
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, sc, counter, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, sc, counter, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
 	require.NoError(t, err)
 	user := &model.User{
-		Email:    "john@example.com",
-		Role:     "customer",
-		IsLocked: false,
-		Profile:  &model.UserProfile{FirstName: "John", LastName: "Doe"},
+		Email:      "john@example.com",
+		Role:       "customer",
+		IsLocked:   false,
+		IsVerified: true,
+		Profile:    &model.UserProfile{FirstName: "John", LastName: "Doe"},
 	}
 	user.ID = userID
 	user.PasswordHash = hash
@@ -762,7 +769,7 @@ func TestRefresh_UsesSessionCacheOnHit(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, sc, nil, privKey, pubKey)
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, sc, nil, nil, nil, privKey, pubKey)
 
 	userID := uuid.New()
 	authToken := &model.AuthToken{
@@ -797,7 +804,7 @@ func TestLogout_DeletesSessionCache(t *testing.T) {
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, sc, nil, privKey, pubKey)
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, sc, nil, nil, nil, privKey, pubKey)
 
 	token := mintToken(t, privKey, userID.String())
 
