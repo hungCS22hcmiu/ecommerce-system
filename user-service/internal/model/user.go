@@ -14,6 +14,8 @@ type User struct {
 	Role                string         `gorm:"type:varchar(50);not null;default:'customer'"`
 	IsLocked            bool           `gorm:"not null;default:false"`
 	FailedLoginAttempts int            `gorm:"not null;default:0"`
+	IsVerified          bool           `gorm:"not null;default:false"`
+	VerifiedAt          *time.Time     `gorm:"type:timestamptz"`
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	DeletedAt           gorm.DeletedAt `gorm:"index"`

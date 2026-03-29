@@ -58,6 +58,16 @@ func (m *mockAuthService) Logout(ctx context.Context, accessToken string) error 
 	return args.Error(0)
 }
 
+func (m *mockAuthService) VerifyEmail(ctx context.Context, req dto.VerifyEmailRequest) error {
+	args := m.Called(ctx, req)
+	return args.Error(0)
+}
+
+func (m *mockAuthService) ResendVerification(ctx context.Context, req dto.ResendVerificationRequest) error {
+	args := m.Called(ctx, req)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func newRouter(svc service.AuthService) *gin.Engine {
@@ -67,6 +77,8 @@ func newRouter(svc service.AuthService) *gin.Engine {
 	r.POST("/api/v1/auth/login", h.Login)
 	r.POST("/api/v1/auth/refresh", h.Refresh)
 	r.POST("/api/v1/auth/logout", h.Logout)
+	r.POST("/api/v1/auth/verify-email", h.VerifyEmail)
+	r.POST("/api/v1/auth/resend-verification", h.ResendVerification)
 	return r
 }
 

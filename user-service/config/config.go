@@ -25,6 +25,13 @@ type Config struct {
 	JWTPrivateKeyPath string
 	JWTPublicKeyPath  string
 
+	// SMTP
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+
 	// App
 	Env string
 }
@@ -42,6 +49,11 @@ func Load() *Config {
 		RedisPassword:     getEnv("REDIS_PASSWORD", ""),
 		JWTPrivateKeyPath: getEnv("JWT_PRIVATE_KEY_PATH", "./keys/private.pem"),
 		JWTPublicKeyPath:  getEnv("JWT_PUBLIC_KEY_PATH", "./keys/public.pem"),
+		SMTPHost:          getEnv("SMTP_HOST", "localhost"),
+		SMTPPort:          getEnv("SMTP_PORT", "587"),
+		SMTPUsername:      getEnv("SMTP_USERNAME", ""),
+		SMTPPassword:      getEnv("SMTP_PASSWORD", ""),
+		SMTPFrom:          getEnv("SMTP_FROM", "noreply@example.com"),
 		Env:               getEnv("ENV", "development"),
 	}
 }
