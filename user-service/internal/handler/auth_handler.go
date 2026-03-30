@@ -88,6 +88,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			response.Error(c, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid email or password", nil)
 		case errors.Is(err, service.ErrAccountLocked):
 			response.Error(c, http.StatusForbidden, "ACCOUNT_LOCKED", "account is locked due to too many failed login attempts", nil)
+		case errors.Is(err, service.ErrEmailNotVerified):
+			response.Error(c, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "please verify your email before logging in", nil)
 		default:
 			response.InternalError(c)
 		}
@@ -144,4 +146,76 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"message": "logged out"})
+}
+
+// VerifyEmail handles POST /api/v1/auth/verify-email
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	var req dto.VerifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
+
+	if err := validate.Struct(req); err != nil {
+		var ve validator.ValidationErrors
+		errors.As(err, &ve)
+		fields := make(map[string]string, len(ve))
+		for _, fe := range ve {
+			fields[fe.Field()] = fe.Tag()
+		}
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "validation failed", fields)
+		return
+	}
+
+	if err := h.authService.VerifyEmail(c.Request.Context(), req); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidCode):
+			response.BadRequest(c, "INVALID_CODE", "verification code is invalid or expired", nil)
+		case errors.Is(err, service.ErrAlreadyVerified):
+			response.BadRequest(c, "ALREADY_VERIFIED", "email is already verified", nil)
+		case errors.Is(err, service.ErrTooManyVerifyAttempts):
+			response.TooManyRequests(c)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.Success(c, gin.H{"message": "email verified"})
+}
+
+// ResendVerification handles POST /api/v1/auth/resend-verification
+func (h *AuthHandler) ResendVerification(c *gin.Context) {
+	var req dto.ResendVerificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
+
+	if err := validate.Struct(req); err != nil {
+		var ve validator.ValidationErrors
+		errors.As(err, &ve)
+		fields := make(map[string]string, len(ve))
+		for _, fe := range ve {
+			fields[fe.Field()] = fe.Tag()
+		}
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "validation failed", fields)
+		return
+	}
+
+	if err := h.authService.ResendVerification(c.Request.Context(), req); err != nil {
+		switch {
+		case errors.Is(err, service.ErrUserNotFound):
+			response.Error(c, http.StatusNotFound, "USER_NOT_FOUND", "no account found with that email", nil)
+		case errors.Is(err, service.ErrAlreadyVerified):
+			response.BadRequest(c, "ALREADY_VERIFIED", "email is already verified", nil)
+		case errors.Is(err, service.ErrResendCooldown):
+			response.TooManyRequests(c)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.Success(c, gin.H{"message": "verification code sent"})
 }

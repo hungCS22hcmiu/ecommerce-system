@@ -1,0 +1,28 @@
+You are a senior backend engineer.
+
+I have a User Service built with Go (Gin, GORM), PostgreSQL, and Redis. It already supports registration, login, and JWT authentication.
+
+Design an email verification system with the following rule:
+
+* A user must verify their email either:
+
+  1. Right after registration, OR
+  2. Be forced to verify on their first login
+* Once verified, the user can log in normally in future sessions
+
+Goals:
+
+* Keep the flow simple, scalable, and secure
+* Minimize friction but enforce verification before full access
+
+Include:
+
+* High-level flow (register → login → verify → normal usage)
+* How login should behave if email is NOT verified
+* Required changes to user model (e.g., is_verified)
+* API endpoints needed (verify, resend, etc.)
+* Where and how to store verification data (Redis or DB)
+* Expiration and resend strategy
+* Security considerations
+
+Avoid overengineering — this is for a SaaS MVP but should scale later.

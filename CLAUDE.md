@@ -83,6 +83,8 @@ Go service internal layout:
 - `pkg/blacklist/` — `Blacklist` interface + Redis impl; `Add(jti, ttl)` / `Contains(jti)` using `blacklist:{jti}` key pattern
 - `pkg/session/` — `Cache` interface + Redis impl; `Set/Get/Delete` user profile at `session:{userID}` (30 min TTL)
 - `pkg/loginattempt/` — `Counter` interface + Redis impl; `Increment/Get/Delete` at `login_attempts:{email}` (15 min sliding TTL)
+- `pkg/verification/` — `Store` interface + Redis impl; `SetCode/GetCode/DeleteCode` (15 min TTL), `SetCooldown/HasCooldown` (60 s TTL), `IncrementAttempts/DeleteAttempts` — keys: `verification:{email}`, `verification_cooldown:{email}`, `verification_attempts:{email}`
+- `pkg/email/` — `Sender` interface + `smtpSender` impl; `SendVerificationCode(ctx, to, code)` via `net/smtp` STARTTLS on port 587
 - `api.txt` — curl-based API testing reference for the service
 
 ### Go Service Patterns
@@ -184,6 +186,8 @@ All responses use a consistent shape (defined in `api/openapi.yaml`):
 ## Key Files
 - `docker-compose.yml` — full stack (infrastructure + all 5 service containers); each service has a `Dockerfile` in its root directory
 - `script/init-databases.sql` — creates all 5 databases and schemas with indexes
+- `script/sample_users.sql` — inserts 1 admin / 1 customer / 1 seller with pre-verified accounts for local testing
+- `Makefile` — common dev commands: `deploy-user`, `db-restart`, `db-nuke`, `db-seed`, `test-user`, etc.
 - `api/openapi.yaml` — full REST API contract
 - `docs/adr/locking-strategy.md` — detailed rationale for per-service concurrency decisions
 - `docs/adr/proposal.md` — full technical proposal with architecture decisions
@@ -201,13 +205,13 @@ Implemented:
 - `pkg/blacklist/` — `Blacklist` interface + Redis impl (`blacklist:{jti}` key, TTL = remaining access-token lifetime)
 - `pkg/session/` — `Cache` interface + Redis impl (`session:{userID}` key, 30 min TTL, JSON value); SET on login, GET on refresh, DEL on logout
 - `pkg/loginattempt/` — `Counter` interface + Redis impl (`login_attempts:{email}` key, 15 min sliding TTL); INCR post-TX on bad password, pre-check before DB TX, DEL on success
-- `internal/dto/` — `RegisterRequest`, `LoginRequest`, `LoginResponse`, `RefreshRequest`, `UserResponse`, `UpdateProfileRequest`, `CreateAddressRequest`, `UpdateAddressRequest`, `AddressResponse`, `ProfileResponse`
-- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`, `FindByEmailForUpdate` (SELECT … FOR UPDATE + Preload("Profile")), `UpdateLoginAttempts`, `FindByIDWithProfile` (Preload Profile + Addresses), `UpdateProfile`
+- `internal/dto/` — `RegisterRequest`, `LoginRequest`, `LoginResponse`, `RefreshRequest`, `UserResponse`, `UpdateProfileRequest`, `CreateAddressRequest`, `UpdateAddressRequest`, `AddressResponse`, `ProfileResponse`, `VerifyEmailRequest`, `ResendVerificationRequest`
+- `internal/repository/user_repository.go` — `Create`, `FindByEmail`, `FindByID`, `FindByEmailForUpdate` (SELECT … FOR UPDATE + Preload("Profile")), `UpdateLoginAttempts`, `FindByIDWithProfile` (Preload Profile + Addresses), `UpdateProfile`, `UpdateVerificationStatus`
 - `internal/repository/auth_token_repository.go` — `Create`, `FindByHash`, `RevokeByUserID`
 - `internal/repository/address_repository.go` — `Create`, `FindByID`, `Update`, `Delete`, `SetDefault` (atomic TX: clear all → set one)
-- `internal/service/auth_service.go` — `Register`, `Login` (pessimistic lock + Redis pre-check + two-layer lockout + session SET), `Refresh` (session cache hit skips FindByID), `Logout` (blacklist jti + session DEL + RevokeByUserID); error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`, `ErrInvalidToken`
+- `internal/service/auth_service.go` — `Register` (creates user + sends verification code), `Login` (pessimistic lock + Redis pre-check + two-layer lockout + session SET; rejects unverified accounts with `ErrEmailNotVerified`), `Refresh` (session cache hit skips FindByID), `Logout` (blacklist jti + session DEL + RevokeByUserID), `VerifyEmail` (brute-force protected, marks `is_verified=true`), `ResendVerification` (60 s cooldown, re-sends code); error sentinels: `ErrDuplicateEmail`, `ErrUserNotFound`, `ErrInvalidCredentials`, `ErrAccountLocked`, `ErrInvalidToken`, `ErrEmailNotVerified`, `ErrInvalidCode`, `ErrAlreadyVerified`, `ErrResendCooldown`, `ErrTooManyVerifyAttempts`
 - `internal/service/user_service.go` — `GetUser` (internal lookup, returns UserResponse), `GetProfile`, `UpdateProfile` (invalidates session cache), `AddAddress`, `UpdateAddress`, `DeleteAddress`, `SetDefaultAddress` (ownership check on all address ops); error sentinels: `ErrAddressNotFound`, `ErrAddressForbidden`
-- `internal/handler/auth_handler.go` — register, login, refresh, logout handlers; validation errors mapped to field→tag map
+- `internal/handler/auth_handler.go` — register, login, refresh, logout, verify-email, resend-verification handlers; validation errors mapped to field→tag map
 - `internal/handler/user_handler.go` — profile + address handlers + `GetUser` (internal, no auth); `parseUserID`/`parseAddressID` helpers; `handleAddressError` for 404/403 mapping
 - `internal/handler/health_handler.go` — `/health/live` (always up) + `/health/ready` (pings Postgres + Redis)
 - `internal/middleware/` — panic recovery + structured JSON logger (X-Correlation-ID) + `Auth` JWT middleware (Bearer extraction → RS256 validate → Redis blacklist check → context injection)
@@ -225,6 +229,8 @@ Active endpoints:
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
 - `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/verify-email`        ← public; 6-digit code + brute-force protection
+- `POST /api/v1/auth/resend-verification` ← public; 60 s cooldown; 404 if email unregistered
 - `POST /api/v1/auth/logout`              ← protected by Auth middleware
 - `GET  /api/v1/users/:id`               ← internal, no auth; Docker network boundary only
 - `GET  /api/v1/users/profile`            ← protected
@@ -234,10 +240,15 @@ Active endpoints:
 - `DELETE /api/v1/users/addresses/:id`    ← protected; ownership check → 403
 - `PUT  /api/v1/users/addresses/:id/default` ← protected; atomic TX sets single default
 
-### Service constructor signatures (Day 11)
+### Service constructor signatures (Day 11 + email verification)
 ```go
-service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, privateKey, publicKey)
+service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, verificationStore, emailSender, privateKey, publicKey)
 service.NewUserService(userRepo, addrRepo, sessionCache)
+```
+
+SMTP env vars required in `.env` and forwarded to the container via `docker-compose.yml`:
+```
+SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM
 ```
 
 Stale-table note: if AutoMigrate fails with "constraint does not exist", drop the tables in psql and restart:

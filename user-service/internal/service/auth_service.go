@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,24 +18,34 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/email"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/password"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
 )
 
 const (
-	maxLoginAttempts = 5
-	refreshTokenTTL  = 7 * 24 * time.Hour
-	sessionTTL       = 30 * time.Minute
+	maxLoginAttempts   = 5
+	refreshTokenTTL    = 7 * 24 * time.Hour
+	sessionTTL         = 30 * time.Minute
+	verificationTTL    = 15 * time.Minute
+	resendCooldown     = 60 * time.Second
+	maxVerifyAttempts  = 5
 )
 
 var (
-	ErrDuplicateEmail     = errors.New("email already registered")
-	ErrUserNotFound       = errors.New("user not found")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrAccountLocked      = errors.New("account locked")
-	ErrInvalidToken       = errors.New("invalid or expired token")
+	ErrDuplicateEmail        = errors.New("email already registered")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrAccountLocked         = errors.New("account locked")
+	ErrInvalidToken          = errors.New("invalid or expired token")
+	ErrEmailNotVerified      = errors.New("email not verified")
+	ErrInvalidCode           = errors.New("invalid or expired verification code")
+	ErrAlreadyVerified       = errors.New("email already verified")
+	ErrResendCooldown        = errors.New("resend on cooldown")
+	ErrTooManyVerifyAttempts = errors.New("too many verification attempts")
 )
 
 type AuthService interface {
@@ -40,17 +53,21 @@ type AuthService interface {
 	Login(ctx context.Context, req dto.LoginRequest) (*dto.LoginResponse, error)
 	Refresh(ctx context.Context, refreshToken string) (*dto.LoginResponse, error)
 	Logout(ctx context.Context, accessToken string) error
+	VerifyEmail(ctx context.Context, req dto.VerifyEmailRequest) error
+	ResendVerification(ctx context.Context, req dto.ResendVerificationRequest) error
 }
 
 type authService struct {
-	userRepo       repository.UserRepository
-	authTokenRepo  repository.AuthTokenRepository
-	db             *gorm.DB
-	bl             blacklist.Blacklist
-	sessionCache   session.Cache
-	attemptCounter loginattempt.Counter
-	privateKey     *rsa.PrivateKey
-	publicKey      *rsa.PublicKey
+	userRepo          repository.UserRepository
+	authTokenRepo     repository.AuthTokenRepository
+	db                *gorm.DB
+	bl                blacklist.Blacklist
+	sessionCache      session.Cache
+	attemptCounter    loginattempt.Counter
+	verificationStore verification.Store
+	emailSender       email.Sender
+	privateKey        *rsa.PrivateKey
+	publicKey         *rsa.PublicKey
 }
 
 // NewAuthService wires all production dependencies.
@@ -61,18 +78,22 @@ func NewAuthService(
 	bl blacklist.Blacklist,
 	sessionCache session.Cache,
 	attemptCounter loginattempt.Counter,
+	verificationStore verification.Store,
+	emailSender email.Sender,
 	privateKey *rsa.PrivateKey,
 	publicKey *rsa.PublicKey,
 ) AuthService {
 	return &authService{
-		userRepo:       userRepo,
-		authTokenRepo:  authTokenRepo,
-		db:             db,
-		bl:             bl,
-		sessionCache:   sessionCache,
-		attemptCounter: attemptCounter,
-		privateKey:     privateKey,
-		publicKey:      publicKey,
+		userRepo:          userRepo,
+		authTokenRepo:     authTokenRepo,
+		db:                db,
+		bl:                bl,
+		sessionCache:      sessionCache,
+		attemptCounter:    attemptCounter,
+		verificationStore: verificationStore,
+		emailSender:       emailSender,
+		privateKey:        privateKey,
+		publicKey:         publicKey,
 	}
 }
 
@@ -107,6 +128,18 @@ func (s *authService) Register(ctx context.Context, req dto.RegisterRequest) (*m
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, err
+	}
+
+	// Generate and send verification code
+	if s.verificationStore != nil && s.emailSender != nil {
+		code := generateVerificationCode()
+		if err := s.verificationStore.SetCode(ctx, user.Email, code, verificationTTL); err != nil {
+			slog.Error("failed to store verification code", "email", user.Email, "error", err)
+		} else {
+			if err := s.emailSender.SendVerificationCode(ctx, user.Email, code); err != nil {
+				slog.Error("failed to send verification email", "email", user.Email, "error", err)
+			}
+		}
 	}
 
 	return user, nil
@@ -164,9 +197,15 @@ func (s *authService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 			return nil // ← commit so the counter update persists
 		}
 
-		// Successful login — reset DB counter
+		// Successful password — reset DB counter
 		if err := s.userRepo.UpdateLoginAttempts(ctx, tx, user.ID, 0, false); err != nil {
 			return err
+		}
+
+		// Check email verification before issuing tokens
+		if !user.IsVerified {
+			loginErr = ErrEmailNotVerified
+			return nil // commit TX — counter reset persists
 		}
 
 		accessToken, err := jwtpkg.GenerateAccessToken(user.ID.String(), user.Email, user.Role, s.privateKey)
@@ -301,6 +340,93 @@ func (s *authService) Logout(ctx context.Context, accessToken string) error {
 	}
 
 	return s.authTokenRepo.RevokeByUserID(ctx, userID)
+}
+
+// VerifyEmail validates a 6-digit code and marks the user as verified.
+func (s *authService) VerifyEmail(ctx context.Context, req dto.VerifyEmailRequest) error {
+	// Brute-force protection
+	count, err := s.verificationStore.IncrementAttempts(ctx, req.Email)
+	if err != nil {
+		return err
+	}
+	if count > int64(maxVerifyAttempts) {
+		return ErrTooManyVerifyAttempts
+	}
+
+	storedCode, err := s.verificationStore.GetCode(ctx, req.Email)
+	if err != nil {
+		return err
+	}
+	if storedCode == "" || storedCode != req.Code {
+		return ErrInvalidCode
+	}
+
+	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrInvalidCode // don't leak whether email exists
+	}
+	if err != nil {
+		return err
+	}
+	if user.IsVerified {
+		return ErrAlreadyVerified
+	}
+
+	if err := s.userRepo.UpdateVerificationStatus(ctx, user.ID, true); err != nil {
+		return err
+	}
+
+	// Clean up Redis
+	s.verificationStore.DeleteCode(ctx, req.Email)     //nolint:errcheck
+	s.verificationStore.DeleteAttempts(ctx, req.Email)  //nolint:errcheck
+
+	return nil
+}
+
+// ResendVerification generates a new verification code and sends it via email.
+func (s *authService) ResendVerification(ctx context.Context, req dto.ResendVerificationRequest) error {
+	hasCooldown, err := s.verificationStore.HasCooldown(ctx, req.Email)
+	if err != nil {
+		return err
+	}
+	if hasCooldown {
+		return ErrResendCooldown
+	}
+
+	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if user.IsVerified {
+		return ErrAlreadyVerified
+	}
+
+	code := generateVerificationCode()
+	if err := s.verificationStore.SetCode(ctx, req.Email, code, verificationTTL); err != nil {
+		return err
+	}
+	if err := s.verificationStore.SetCooldown(ctx, req.Email, resendCooldown); err != nil {
+		slog.Error("failed to set resend cooldown", "email", req.Email, "error", err)
+	}
+
+	if err := s.emailSender.SendVerificationCode(ctx, req.Email, code); err != nil {
+		slog.Error("failed to send verification email", "email", req.Email, "error", err)
+	}
+
+	return nil
+}
+
+// generateVerificationCode returns a cryptographically random 6-digit numeric string.
+func generateVerificationCode() string {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		// Fallback — should never happen with crypto/rand
+		return "000000"
+	}
+	return fmt.Sprintf("%06d", n.Int64())
 }
 
 // hashToken returns the SHA-256 hex digest of a token string.

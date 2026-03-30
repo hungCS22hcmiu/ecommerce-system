@@ -25,6 +25,8 @@ CREATE TABLE users (
     role                  VARCHAR(50)  NOT NULL DEFAULT 'customer',
     is_locked             BOOLEAN      NOT NULL DEFAULT FALSE,
     failed_login_attempts INT          NOT NULL DEFAULT 0,
+    is_verified           BOOLEAN      NOT NULL DEFAULT FALSE,
+    verified_at           TIMESTAMPTZ,
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     deleted_at            TIMESTAMPTZ
