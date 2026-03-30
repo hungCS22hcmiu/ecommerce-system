@@ -1,0 +1,25 @@
+Phase 1 — Spring Boot + JPA Foundations
+Learning Topics:
+• Spring Boot 3 project structure (controllers, services, repositories, entities) • JPA entity lifecycle: managed → detached → merged
+• Flyway migrations: why schema versioning matters (vs AutoMigrate in Go) • Spring Data JPA: derived query methods, @Query, Specifications
+Implementation:
+• Write Flyway migrations for products, categories, inventory tables
+• Create JPA entities: Product, Category, Inventory with proper relationships • Implement ProductRepository (Spring Data JPA interface)
+• Implement ProductService with CRUD operations
+• Implement ProductController with REST endpoints:
+• POST /api/v1/products — create product (admin)
+• GET /api/v1/products — list with pagination + filtering
+ 
+• GET /api/v1/products/:id — get by ID
+• PUT /api/v1/products/:id — update product
+• GET /api/v1/products/search?q= — keyword search
+Review/Test:
+• Unit tests for service layer (mock repository)
+• Test pagination edge cases (empty page, last page) • Verify Flyway migration runs correctly on fresh DB
+Deliverable: Product CRUD working via curl, tests passing.
+
+
+------------------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------------------

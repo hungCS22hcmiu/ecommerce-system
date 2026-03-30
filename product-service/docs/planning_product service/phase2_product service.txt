@@ -1,0 +1,18 @@
+Phase 2 — Inventory Management + Optimistic Locking
+Learning Topics:
+• Optimistic locking: how @Version works in JPA (version column, OptimisticLockException) • Why optimistic > pessimistic for product catalog (high read, low write contention)
+• Spring @Retryable — automatic retry on version conflicts
+• Stock reservation vs. stock deduction (two-phase approach)
+Implementation:
+• Add @Version to Inventory entity
+• Implement stock reservation: reserveStock(productId, quantity) — checks availability, decrements with
+version check
+• Implement stock release: releaseStock(productId, quantity) — for cancelled orders • Add @Retryable(maxAttempts=3) on stock reservation for version conflicts
+• Create InventoryController endpoints:
+• POST /api/v1/inventory/:productId/reserve — reserve stock • POST /api/v1/inventory/:productId/release — release stock • GET /api/v1/inventory/:productId — check stock level
+Review/Test:
+• Critical test: Write a concurrent test that fires 10 simultaneous reservation requests for a product with stock=5.
+Verify exactly 5 succeed, 5 fail. This is your proof that optimistic locking works.
+• Test retry behavior: verify that @Retryable handles OptimisticLockException
+• Understand what happens WITHOUT the @Version annotation (write a failing test first)
+Deliverable: Concurrent stock reservation demo that you can explain in an interview.

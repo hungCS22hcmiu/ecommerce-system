@@ -1,0 +1,14 @@
+Week 4 — Testing, Docs, and Hardening
+Implementation:
+• Write integration tests: full Spring Boot test with @SpringBootTest + Testcontainers (or real Postgres) • Add input validation on all DTOs (@Valid, @NotBlank, @Min, @Max)
+• Add proper error handling with @ControllerAdvice (matching your response envelope)
+• Update api/openapi.yaml with product endpoints
+• Write product-service/api.txt with curl examples
+• Health check: add /health/ready that checks Postgres + Redis connectivity
+Review/Test:
+• Run the full test suite, fix any flaky tests
+• Verify Docker build works: docker compose build product-service && docker compose up
+  product-service
+• Test product service talking to Postgres in Docker
+• Reflection exercise: Write 5 bullet points: "What I learned about Spring Boot that surprised me vs. Go"
+Milestone: Product Service complete. All endpoints working, cached, tested, documented.

@@ -1,0 +1,16 @@
+Week 3 — Redis Caching (Cache-Aside Pattern)
+Learning Topics:
+• Cache-aside pattern: read → check cache → miss → load from DB → write to cache
+• Cache invalidation strategies: TTL-based vs event-based
+• Redis data types: String (for single product), Hash (for product fields), Sorted Set (for rankings) • Spring Cache abstraction: @Cacheable, @CacheEvict, @CachePut
+• When caching hurts: low-cardinality queries, write-heavy data
+Implementation:
+• Configure Spring Cache with Redis (spring-boot-starter-data-redis) • Add @Cacheable("products") on getProductById
+• Add @CacheEvict on product update/delete
+• Cache product listing responses (short TTL, 2-5 minutes)
+• Add cache hit/miss logging so you can observe the behavior
+• Implement manual cache warming on service startup (top 100 products)
+Review/Test:
+• Verify cache hit: call getProduct twice, check Redis has the key, check DB was queried only once • Verify cache invalidation: update product, verify next read gets fresh data
+• Test cache stampede scenario: what happens when cache expires and 100 requests hit simultaneously? (understand the problem, document it — you don't need to solve it now)
+Deliverable: Product service with Redis caching. You can demonstrate cache behavior with logs.

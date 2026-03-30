@@ -1,8 +1,7 @@
-prompting.txt
 .env
 user-service/tmp/
 user-service/keys/
-.CLAUDE
 /scripts
 docs/timeline.md
 CLAUDE.md
+what to learn?
