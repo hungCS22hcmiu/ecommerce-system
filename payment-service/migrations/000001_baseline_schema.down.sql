@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS payment_history CASCADE;
+DROP TABLE IF EXISTS payments CASCADE;
+DROP TYPE IF EXISTS payment_status;
+DROP TYPE IF EXISTS payment_method;

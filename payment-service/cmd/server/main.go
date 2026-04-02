@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-migrate/migrate/v4"
+	pgmigrate "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -35,6 +38,23 @@ func main() {
 	sqlDB.SetMaxIdleConns(5)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 	slog.Info("payment-service postgres connected", "db", cfg.DBName)
+
+	// ── Database Migrations ───────────────────────────────────────────────────
+	migDriver, err := pgmigrate.WithInstance(sqlDB, &pgmigrate.Config{})
+	if err != nil {
+		slog.Error("migration driver failed", "error", err)
+		os.Exit(1)
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://migrations", "ecommerce_payments", migDriver)
+	if err != nil {
+		slog.Error("migration init failed", "error", err)
+		os.Exit(1)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		slog.Error("migration failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("database migrations applied")
 
 	// NOTE: Payment Service does NOT use Redis directly.
 	// Idempotency is handled at the DB layer (unique constraint on idempotency_key).

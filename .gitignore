@@ -5,3 +5,11 @@ user-service/keys/
 docs/timeline.md
 CLAUDE.md
 what to learn?
+# Go build files
+server
+*.exe
+*.out
+
+# general
+bin/
+build/
