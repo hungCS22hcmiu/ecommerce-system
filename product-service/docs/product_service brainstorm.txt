@@ -1,0 +1,38 @@
+implement in 2 weeks
+
+Responsibility: Product catalog management, search, category browsing, and stock/inventory management.
+
+Merging inventory into Product Service eliminates an inter-service call on every checkout and keeps stock as a first-class attribute of a product.
+
+Why Java for Product+Inventory: This service has the most complex data model (categories, images, stock movements, full-text search) and the highest need for transactional integrity (stock reservation must be atomic). JPA's @Version + @Transactional makes concurrency-safe stock operations declarative.
+
+Key Java Concurrency Patterns Used:
+
+@Version optimistic locking: Prevents stock overselling without database-level locks — the JPA provider automatically adds WHERE version = ? to UPDATE statements
+@Transactional(isolation = Isolation.READ_COMMITTED): Default isolation level — prevents dirty reads while allowing concurrent product reads
+@Retry (Resilience4j): Automatic retry on OptimisticLockException — handles concurrent stock reservation gracefully
+@Async + CompletableFuture: Cache warming on startup runs in a background thread, doesn't block the application boot
+@Cacheable / @CacheEvict: Thread-safe Redis cache operations via Spring's cache abstraction
+
+
+API Endpoints — Product:
+
+Method	Endpoint	Auth	Description
+POST	/api/v1/products	Seller/Admin	Create product with initial stock
+GET	/api/v1/products/{id}	Public	Get product by ID (includes stock availability)
+PUT	/api/v1/products/{id}	Seller/Admin	Update product details
+DELETE	/api/v1/products/{id}	Admin	Soft-delete product (set status=DELETED)
+GET	/api/v1/products	Public	List products with pagination, filters, sorting
+GET	/api/v1/products/search?q={query}	Public	Full-text search with relevance ranking
+GET	/api/v1/products/ai-search?q={query}	Public	Semantic search via RAG — embeds query, pgvector similarity, falls back to keyword search
+GET	/api/v1/categories	Public	List all categories (tree structure)
+GET	/api/v1/categories/{id}/products	Public	List products in a category
+API Endpoints — Inventory (within Product Service):
+
+Method	Endpoint	Auth	Description
+GET	/api/v1/inventory/{productId}	Internal	Check available stock (quantity - reserved)
+POST	/api/v1/inventory/{productId}/reserve	Internal	Reserve stock for order (atomic)
+POST	/api/v1/inventory/{productId}/release	Internal	Release reserved stock (on cancellation)
+POST	/api/v1/inventory/{productId}/confirm	Internal	Deduct reserved stock (order confirmed)
+PUT	/api/v1/inventory/{productId}	Admin	Manually adjust stock levels
+GET	/api/v1/inventory/{productId}/movements	Admin	View stock movement audit trail

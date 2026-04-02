@@ -1,6 +1,6 @@
 # Use Cases & API Endpoints
 
-## User Service (Go — :8001)
+## User Service (Go — :8001) ✅ Implemented
 
 ### Authentication
 
@@ -9,38 +9,45 @@
 | POST | `/api/v1/auth/register` | Public | Register new user account |
 | POST | `/api/v1/auth/login` | Public | Authenticate and return JWT + refresh token |
 | POST | `/api/v1/auth/refresh` | Public | Issue new JWT from refresh token |
+| POST | `/api/v1/auth/verify-email` | Public | Verify email with 6-digit code (brute-force protected) |
+| POST | `/api/v1/auth/resend-verification` | Public | Resend verification code (60s cooldown) |
 | POST | `/api/v1/auth/logout` | Bearer | Revoke tokens, add JWT to Redis blacklist |
 
-### User Profile
+### User Profile & Addresses
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/users/profile` | Bearer | Get current user profile + addresses |
-| PUT | `/api/v1/users/profile` | Bearer | Update user profile |
-| GET | `/api/v1/users/{id}` | Internal | Get user by ID (service-to-service only) |
+| PUT | `/api/v1/users/profile` | Bearer | Update user profile (invalidates session cache) |
+| GET | `/api/v1/users/{id}` | Internal | Get user by ID (service-to-service, Docker network only) |
+| POST | `/api/v1/users/addresses` | Bearer | Add new address |
+| PUT | `/api/v1/users/addresses/{id}` | Bearer | Update address (ownership check → 403) |
+| DELETE | `/api/v1/users/addresses/{id}` | Bearer | Delete address (ownership check → 403) |
+| PUT | `/api/v1/users/addresses/{id}/default` | Bearer | Set default address (atomic TX) |
 
 ### Authentication Flow
 
 1. User submits email + password → bcrypt hash comparison (cost 12)
 2. Check `is_locked` flag and `failed_login_attempts` (lockout after 5 consecutive failures)
-3. On success → reset `failed_login_attempts`, generate:
-   - **Access token:** JWT (RS256), 15-minute TTL, claims: `{userId, email, role}`
+3. Reject if email not verified (`ErrEmailNotVerified`)
+4. On success → reset `failed_login_attempts`, generate:
+   - **Access token:** JWT (RS256), 15-minute TTL, claims: `{userId, email, role, jti}`
    - **Refresh token:** Opaque random string, 7-day TTL, stored hashed in `auth_tokens`
-4. On failure → increment `failed_login_attempts`, lock account if threshold exceeded
-5. Logout → add JWT `jti` to Redis blacklist with TTL matching token remaining lifetime
+5. On failure → increment `failed_login_attempts`, lock account if threshold exceeded
+6. Logout → add JWT `jti` to Redis blacklist with TTL matching token remaining lifetime
 
 ### Data Model
 
 | Table | Key Columns |
 |---|---|
-| `users` | id (UUID), email (unique), password_hash, role, is_locked, failed_login_attempts |
+| `users` | id (UUID), email (unique), password_hash, role, is_locked, is_verified, failed_login_attempts |
 | `user_profiles` | id, user_id (FK), first_name, last_name, phone, avatar_url |
 | `user_addresses` | id, user_id (FK), street, city, state, zip, country, is_default |
 | `auth_tokens` | id, user_id (FK), refresh_token_hash, expires_at, revoked |
 
 ---
 
-## Product Service (Java/Spring Boot — :8081)
+## Product Service (Java/Spring Boot — :8081) 🔲 Planned (Phase 1)
 
 ### Product CRUD
 
@@ -52,6 +59,7 @@
 | DELETE | `/api/v1/products/{id}` | Admin | Soft-delete product (set status=DELETED) |
 | GET | `/api/v1/products` | Public | List products with pagination, filters, sorting |
 | GET | `/api/v1/products/search?q={query}` | Public | Full-text search with relevance ranking |
+| GET | `/api/v1/products/ai-search?q={query}` | Public | Semantic search via RAG (Phase 5) |
 | GET | `/api/v1/categories` | Public | List all categories (tree structure) |
 | GET | `/api/v1/categories/{id}/products` | Public | List products in a category |
 
@@ -70,14 +78,14 @@
 
 | Table | Key Columns |
 |---|---|
-| `products` | id, name, description, price (DECIMAL(10,2)), category_id, seller_id, status, stock_quantity, stock_reserved, version (optimistic lock) |
+| `products` | id, name, description, price (DECIMAL(10,2)), category_id, seller_id, status, stock_quantity, stock_reserved, version (optimistic lock), embedding vector(384) |
 | `categories` | id, name, slug, parent_id (self-referencing hierarchy), sort_order |
 | `product_images` | id, product_id (FK), url, alt_text, sort_order |
 | `stock_movements` | id, product_id (FK), type (IN/OUT/RESERVE/RELEASE), quantity, reference_id, reason |
 
 ---
 
-## Cart Service (Go — :8002)
+## Cart Service (Go — :8002) 🔲 Planned (Phase 2)
 
 ### Cart Operations
 
@@ -106,7 +114,7 @@
 
 ---
 
-## Order Service (Java/Spring Boot — :8082)
+## Order Service (Java/Spring Boot — :8082) 🔲 Planned (Phase 2–3)
 
 ### Order Management
 
@@ -153,23 +161,6 @@
 | CONFIRMED → SHIPPED | `PUT /orders/{id}/ship` | Send shipment email with tracking |
 | SHIPPED → DELIVERED | `PUT /orders/{id}/deliver` | Send delivery confirmation email |
 
-### Kafka Events
-
-**Published:**
-
-| Topic | Event | Payload |
-|---|---|---|
-| `orders.created` | ORDER_CREATED | orderId, userId, items[], totalAmount |
-| `orders.confirmed` | ORDER_CONFIRMED | orderId, userId |
-| `orders.cancelled` | ORDER_CANCELLED | orderId, userId, reason, items[] |
-
-**Consumed:**
-
-| Topic | Action |
-|---|---|
-| `payments.completed` | PENDING→CONFIRMED, confirm stock, send email |
-| `payments.failed` | PENDING→CANCELLED, release stock, send failure email |
-
 ### Data Model
 
 | Table | Key Columns |
@@ -181,7 +172,7 @@
 
 ---
 
-## Payment Service (Go — :8003)
+## Payment Service (Go — :8003) 🔲 Planned (Phase 3)
 
 ### Payment Operations
 
@@ -199,12 +190,6 @@
 3. Create payment record (status=PENDING) — claims the idempotency key
 4. Call mock payment gateway (5s timeout)
 5. Update status → publish `payments.completed` or `payments.failed` to Kafka
-
-### Mock Payment Gateway
-
-- Configurable success rate (default: 90%)
-- Random latency (50–200ms) to simulate network call
-- Supports forced failure via special card numbers (for testing)
 
 ### Dead Letter Queue
 
@@ -226,7 +211,7 @@
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/health/live` | Liveness probe — process is running |
-| GET | `/health/ready` | Readiness probe — DB, Redis, Kafka reachable |
+| GET | `/health/ready` | Readiness probe — DB, Redis, Kafka reachable (Go services only currently) |
 
 ---
 
@@ -237,4 +222,4 @@
 - **Auth:** Bearer JWT in `Authorization` header
 - **Pagination:** `?page=0&size=20&sort=createdAt,desc`
 - **Filtering:** `?category=electronics&minPrice=10&maxPrice=100`
-- **Response envelope:** See [convention.md](convention.md) for standard response format
+- **Response envelope:** See [convention.md](convention.md)

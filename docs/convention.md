@@ -85,6 +85,8 @@ Go services use `github.com/go-playground/validator/v10` on DTOs. Validation err
 }
 ```
 
+Java services use `@Valid` + Bean Validation annotations. Errors handled by `@ControllerAdvice` in the same envelope format.
+
 ---
 
 ## Go Service Conventions
@@ -101,7 +103,8 @@ Go services use `github.com/go-playground/validator/v10` on DTOs. Validation err
 │   ├── repository/             # DB access (interface + GORM impl)
 │   ├── model/                  # GORM models
 │   ├── dto/                    # Request/response structs with `validate:"..."` tags
-│   └── middleware/             # Recovery + structured JSON logger
+│   ├── middleware/             # Recovery + structured JSON logger + JWT auth
+│   └── integration/            # Integration tests (build tag `integration`)
 ├── pkg/
 │   ├── response/               # Shared response envelope helpers
 │   ├── password/               # bcrypt helpers
@@ -130,7 +133,7 @@ handler → service → repository → db.WithContext(ctx)
 
 ### Error Sentinels
 
-Use sentinel errors for business logic (not generic errors):
+Use sentinel errors for business logic:
 ```go
 var (
     ErrDuplicateEmail     = errors.New("email already registered")
@@ -170,8 +173,8 @@ Called in `main.go` at startup. Drops and recreates tables cleanly in dev if sch
 │   ├── repository/             # Spring Data JPA repositories
 │   ├── model/                  # JPA entities
 │   ├── dto/                    # Request/response DTOs
-│   ├── exception/              # Custom exceptions + global handler
-│   ├── config/                 # Redis, Kafka, security config
+│   ├── exception/              # Custom exceptions + @ControllerAdvice global handler
+│   ├── config/                 # Redis, Kafka, security, async config
 │   └── <Service>Application.java
 ├── src/main/resources/
 │   ├── application.yml
@@ -196,6 +199,10 @@ Flyway for versioned SQL migrations. Files in `src/main/resources/db/migration/`
 ### Lombok
 
 Used for boilerplate reduction: `@Data`, `@Builder`, `@NoArgsConstructor`, `@AllArgsConstructor`.
+
+### Constructor Injection
+
+Spring beans use constructor injection (not field injection) for testability.
 
 ---
 
@@ -235,7 +242,7 @@ Used for boilerplate reduction: `@Data`, `@Builder`, `@NoArgsConstructor`, `@All
 
 ### Branch Naming
 
-- Feature branches: `<Service-name>` or `feature/<description>`
+- Feature branches: `feature/<service-name>` or `feature/<description>`
 - Bug fixes: `fix/<description>`
 
 ### Commit Messages
@@ -264,7 +271,7 @@ All services emit JSON-structured logs with consistent fields:
 }
 ```
 
-- **Correlation ID:** Generated at Nginx, propagated via `X-Correlation-ID` header
+- **Correlation ID:** Generated at Nginx, propagated via `X-Correlation-ID` header across all services and Kafka messages
 - **Log levels:** ERROR (actionable failures), WARN (degraded), INFO (key events), DEBUG (dev only)
 
 ---

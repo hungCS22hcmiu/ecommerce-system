@@ -2,14 +2,13 @@
 
 ## System Overview
 
-A distributed e-commerce platform with 5 microservices. Go services handle I/O-heavy concurrent workloads; Java/Spring Boot services handle complex business logic with transactions. All services sit behind an Nginx reverse proxy and communicate via REST (synchronous) and Kafka (asynchronous).
+A distributed e-commerce platform with 5 microservices + 1 AI sidecar. Go services handle I/O-heavy concurrent workloads; Java/Spring Boot services handle complex business logic with transactions. All services sit behind an Nginx reverse proxy and communicate via REST (synchronous) and Kafka (asynchronous).
 
 ## System Architecture Diagram
 
 ```
                                     ┌─────────────────────────────┐
-                                    │       React Frontend        │
-                                    │     (Vite + TypeScript)     │
+                                    │         Client / UI         │
                                     └────────────┬────────────────┘
                                                  │ HTTP
                                     ┌────────────▼────────────────┐
@@ -22,10 +21,16 @@ A distributed e-commerce platform with 5 microservices. Go services handle I/O-h
                    │   User Svc  │ │Product Svc │ │Cart Svc │ │Order Svc│ │Payment Svc  │
                    │   (Golang)  │ │(Java/Boot) │ │(Golang) │ │(Java)   │ │  (Golang)   │
                    │   :8001     │ │  :8081     │ │ :8002   │ │ :8082   │ │   :8003     │
-                   └──────┬──────┘ └─┬─────────┘ └┬───┬────┘ └┬───┬───┘ └┬────────┬───┘
-                          │          │             │   │       │   │      │        │
-                   ┌──────▼──────────▼─────────────▼───┘       │   │      │        │
-                   │          PostgreSQL 15+                    │   │      │        │
+                   └──────┬──────┘ └─┬────┬────┘ └┬───┬────┘ └┬───┬───┘ └┬────────┬───┘
+                          │          │    │        │   │       │   │      │        │
+                          │          │  ┌─▼──────────┐│       │   │      │        │
+                          │          │  │ AI Service ││       │   │      │        │
+                          │          │  │ (Python)   ││       │   │      │        │
+                          │          │  │ :8004      ││       │   │      │        │
+                          │          │  │ sidecar    ││       │   │      │        │
+                          │          │  └────────────┘│       │   │      │        │
+                   ┌──────▼──────────▼────────────────▼───┘   │   │      │        │
+                   │     PostgreSQL 15+ (with pgvector)        │   │      │        │
                    │  (5 logical DBs, connection pooling)       │   │      │        │
                    └───────────────────────────────────────────┘   │      │        │
                                                                    │      │        │
@@ -49,6 +54,9 @@ A distributed e-commerce platform with 5 microservices. Go services handle I/O-h
 | Cart Service | Go (Gin + GORM) | 8002 | Shopping cart lifecycle | Most latency-sensitive; Redis I/O-bound ops + background goroutine persistence |
 | Order Service | Java/Spring Boot | 8082 | Order lifecycle, notifications | Complex state machine + multi-step transactions + Kafka consumer/producer |
 | Payment Service | Go (Gin) | 8003 | Payment processing, refunds | I/O-bound gateway calls; explicit error handling forces every error path to be considered |
+| AI Service | Python/FastAPI | 8004 | Embedding generation (sidecar) | sentence-transformers is Python-native; isolates ML model lifecycle |
+
+**AI Service** is a lightweight sidecar — not a full microservice. Single `POST /embed` endpoint used by Product Service for query embedding. Not exposed through Nginx.
 
 ## Communication Patterns
 
@@ -60,6 +68,7 @@ A distributed e-commerce platform with 5 microservices. Go services handle I/O-h
 | Order Service | Product Service | Reserve stock at order creation | Retry 3x, then fail order with clear error |
 | Order Service | Product Service | Release stock on cancellation | Retry with DLQ fallback |
 | Order Service | Product Service | Confirm stock deduction on payment success | Retry with DLQ fallback |
+| Product Service | AI Service | Embed search query for vector similarity | Circuit breaker + fallback to keyword search |
 
 ### Asynchronous (Kafka — Choreography Saga)
 
@@ -118,7 +127,7 @@ Client ──POST /orders──► Order Service
 
 ## Databases
 
-Single PostgreSQL instance with 5 logical databases. Each service connects with its own credentials and can only access its own database. Cross-DB references enforced at the application level, not by FK constraints.
+Single PostgreSQL instance with 5 logical databases. Each service owns its database exclusively. Cross-DB references enforced at the application level, not by FK constraints.
 
 | Database | Owner Service | Key Tables |
 |---|---|---|
@@ -142,6 +151,7 @@ Single PostgreSQL instance with 5 logical databases. Each service connects with 
 | `session:{userId}` | User profile JSON | 30 min | User Service |
 | `blacklist:{jti}` | `"revoked"` | Matches JWT remaining lifetime | User Service |
 | `login_attempts:{email}` | Integer counter | 15 min (sliding) | User Service |
+| `verification:{email}` | 6-digit code | 15 min | User Service |
 | `product:{productId}` | Product JSON (with stock) | 10 min | Product Service |
 | `category:list` | All categories JSON | 30 min | Product Service |
 | `cart:{userId}` | Cart JSON with items | 30 min (extended on write) | Cart Service |
@@ -167,6 +177,7 @@ See [locking-strategy.md](adrs/locking-strategy.md) for detailed rationale per s
 |---|---|---|---|---|
 | Cart → Product | `gobreaker` | 3 consecutive failures | 10s | 3 requests |
 | Order → Product | Resilience4j | 50% failure rate (10 calls) | 15s | 5 requests |
+| Product → AI Service | Resilience4j | 3 consecutive failures | 10s | 3 requests |
 
 ### Retry Strategy
 
@@ -190,7 +201,7 @@ All services: stop accepting new requests → finish in-flight (30s timeout) →
 
 ## Nginx Reverse Proxy
 
-Single entry point for all client traffic. Not a custom service — pure configuration.
+Single entry point for all client traffic. Pure configuration, not a custom service.
 
 | Path Prefix | Target Upstream |
 |---|---|
@@ -214,6 +225,7 @@ Capabilities: path-based routing, rate limiting (100 req/min per IP), CORS, TLS 
 | Token revocation | Redis blacklist keyed by `jti` |
 | RBAC roles | `ADMIN`, `SELLER`, `CUSTOMER` |
 | Account lockout | 5 consecutive failures → 15-min lockout |
+| Email verification | 6-digit code, 15-min TTL, brute-force protected |
 | Rate limiting | Nginx: 100 req/min per IP |
 | SQL injection | Parameterized queries only (GORM, JPA) |
 | Service-to-service | Docker network isolation + API key header |
@@ -229,10 +241,6 @@ Capabilities: path-based routing, rate limiting (100 req/min per IP), CORS, TLS 
 
 `postgres, redis → kafka → services → nginx`
 
-### Cloud Options
+### Cloud Target (Phase 6)
 
-| Option | Cost | Best For |
-|---|---|---|
-| AWS EC2 + RDS + ElastiCache | ~$0–15/month (free tier first year) | Cheapest first year |
-| GCP Compute Engine + Cloud SQL | ~$0/month (first 90 days with $300 credit) | Simple VM deployment |
-| GCP Cloud Run (serverless) | ~$30/month after credits | Interview demo, auto-scales |
+AWS EC2 + RDS (managed PostgreSQL with pgvector) + ElastiCache (managed Redis). CI/CD via GitHub Actions.
