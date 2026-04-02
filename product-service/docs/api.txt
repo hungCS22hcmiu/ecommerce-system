@@ -1,0 +1,140 @@
+# Product Service — curl Test Commands
+# Base URL: http://localhost:8081
+# Auth: write endpoints require X-Seller-Id header (UUID of the seller)
+
+# ── Variables (set once) ──────────────────────────────────────────────────────
+
+SELLER_ID="11111111-1111-1111-1111-111111111111"   # seller from sample_users.sql
+BASE="http://localhost:8081/api/v1/products"
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
+# Liveness probe
+curl -s http://localhost:8081/health/live | jq .
+
+# ── Create product ────────────────────────────────────────────────────────────
+
+# Minimal (no category, no images)
+curl -s -X POST $BASE \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{
+    "name": "Wireless Mouse",
+    "description": "Ergonomic 2.4GHz wireless mouse",
+    "price": "29.99",
+    "stockQuantity": 100
+  }' | jq .
+
+# With category and images
+curl -s -X POST $BASE \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{
+    "name": "Mechanical Keyboard",
+    "description": "TKL, Cherry MX Brown switches",
+    "price": "89.99",
+    "categoryId": 1,
+    "stockQuantity": 50,
+    "images": [
+      { "url": "https://example.com/kb-front.jpg", "altText": "front view", "sortOrder": 0 },
+      { "url": "https://example.com/kb-back.jpg",  "altText": "back view",  "sortOrder": 1 }
+    ]
+  }' | jq .
+
+# Missing X-Seller-Id → 400 BAD_REQUEST
+curl -s -X POST $BASE \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test","price":"9.99","stockQuantity":1}' | jq .
+
+# Validation error (blank name) → 400 VALIDATION_ERROR
+curl -s -X POST $BASE \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{"name":"","price":"9.99","stockQuantity":1}' | jq .
+
+# ── Get product ───────────────────────────────────────────────────────────────
+
+# Existing active product
+curl -s $BASE/1 | jq .
+
+# Non-existent product → 404 PRODUCT_NOT_FOUND
+curl -s $BASE/99999 | jq .
+
+# ── List products ─────────────────────────────────────────────────────────────
+
+# Default (page 0, size 20, sorted by createdAt DESC)
+curl -s "$BASE" | jq .
+
+# With pagination
+curl -s "$BASE?page=0&size=5" | jq .
+
+# Filter by category
+curl -s "$BASE?categoryId=1" | jq .
+
+# Filter by status
+curl -s "$BASE?status=INACTIVE" | jq .
+
+# Category + status + pagination combined
+curl -s "$BASE?categoryId=1&status=ACTIVE&page=0&size=10&sort=price,asc" | jq .
+
+# ── Search products ───────────────────────────────────────────────────────────
+
+# Full-text search
+curl -s "$BASE/search?q=keyboard" | jq .
+
+# Paginated search
+curl -s "$BASE/search?q=wireless&page=0&size=5" | jq .
+
+# No matches → empty page
+curl -s "$BASE/search?q=xyznonexistent" | jq .
+
+# ── Update product ────────────────────────────────────────────────────────────
+
+# Partial update (name only)
+curl -s -X PUT $BASE/1 \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{"name": "Wireless Mouse Pro"}' | jq .
+
+# Full update
+curl -s -X PUT $BASE/1 \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{
+    "name": "Wireless Mouse Pro",
+    "description": "Updated description",
+    "price": "34.99",
+    "categoryId": 1,
+    "status": "ACTIVE",
+    "stockQuantity": 80
+  }' | jq .
+
+# Replace images
+curl -s -X PUT $BASE/1 \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: $SELLER_ID" \
+  -d '{
+    "images": [
+      { "url": "https://example.com/new.jpg", "altText": "new image", "sortOrder": 0 }
+    ]
+  }' | jq .
+
+# Wrong seller → 403 ACCESS_DENIED
+curl -s -X PUT $BASE/1 \
+  -H "Content-Type: application/json" \
+  -H "X-Seller-Id: 00000000-0000-0000-0000-000000000000" \
+  -d '{"name": "Hacked"}' | jq .
+
+# ── Delete product ────────────────────────────────────────────────────────────
+
+# Soft delete (sets status → DELETED)
+curl -s -X DELETE $BASE/1 \
+  -H "X-Seller-Id: $SELLER_ID"
+# Expect: 204 No Content (empty body)
+
+# Confirm product is gone (404 after delete)
+curl -s $BASE/1 | jq .
+
+# Wrong seller → 403 ACCESS_DENIED
+curl -s -X DELETE $BASE/1 \
+  -H "X-Seller-Id: 00000000-0000-0000-0000-000000000000" | jq .
