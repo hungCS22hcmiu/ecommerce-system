@@ -4,7 +4,8 @@ Learning Topics:
 • Flyway migrations: why schema versioning matters (vs AutoMigrate in Go) • Spring Data JPA: derived query methods, @Query, Specifications
 Implementation:
 • Write Flyway migrations for products, categories, inventory tables
-• Create JPA entities: Product, Category, Inventory with proper relationships • Implement ProductRepository (Spring Data JPA interface)
+• Create JPA entities: Product, Category, Inventory with proper relationships 
+• Implement ProductRepository (Spring Data JPA interface)
 • Implement ProductService with CRUD operations
 • Implement ProductController with REST endpoints:
 • POST /api/v1/products — create product (admin)

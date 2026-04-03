@@ -9,7 +9,7 @@ Distributed e-commerce platform — 5 microservices. Go services handle I/O-heav
 | Service | Language | Port | Status | Key Pattern |
 |---|---|---|---|---|
 | user-service | Go (Gin + GORM) | 8001 | **Implemented** | Pessimistic lock on login |
-| product-service | Java/Spring Boot | 8081 | Scaffolded | Optimistic lock (@Version + @Retry) |
+| product-service | Java/Spring Boot | 8081 | **In Progress** | Optimistic lock (@Version + @Retry) |
 | cart-service | Go (Gin + GORM) | 8002 | Scaffolded | Redis-first, WATCH/MULTI/EXEC |
 | order-service | Java/Spring Boot | 8082 | Scaffolded | Pessimistic lock on state transitions |
 | payment-service | Go (Gin) | 8003 | Scaffolded | Idempotency key + DB UNIQUE |
@@ -78,8 +78,6 @@ cd product-service  # or order-service
 
 Java 21, Spring Boot 3.5, Lombok. Flyway present but **disabled** (no migrations yet, `ddl-auto: none`).
 
-Current state: only `HealthController` (`GET /health/live`) + `AsyncConfig`. All model/repo/service/controller/dto packages are empty.
-
 ## Architecture
 
 ### Communication
@@ -123,6 +121,35 @@ RS256, 15 min access TTL. Keys: `./keys/private.pem` / `./keys/public.pem` (conf
 - `docs/adr/locking-strategy.md` — per-service concurrency rationale
 - `docs/adr/proposal.md` — full technical proposal
 - `.env.example` — all 43 env vars with descriptions
+
+## product-service (In Progress)
+
+### Active Endpoints
+```
+GET  /health/live
+POST /api/v1/products                        # seller only (X-Seller-Id header)
+GET  /api/v1/products/{id}                   # public
+GET  /api/v1/products?categoryId=&status=    # public; paginated
+GET  /api/v1/products/search?q=              # public; full-text, paginated
+PUT  /api/v1/products/{id}                   # seller only; ownership check → 403
+DELETE /api/v1/products/{id}                 # seller only; soft delete → DELETED
+```
+
+### Auth Convention
+No JWT validation yet. Gateway pre-validates and forwards `X-Seller-Id: <UUID>` header.
+Missing header on write endpoints → 400.
+
+### Key Classes
+- `ProductServiceImpl` — business logic, optimistic lock via `@Version`
+- `ProductController` — REST layer, `@PageableDefault(size=20, sort=createdAt DESC)`
+- `GlobalExceptionHandler` — maps domain exceptions to envelope errors
+- `ApiResponse<T>` — `{ success, data, meta?, error? }` envelope
+
+### Tests
+`ProductServiceImplTest` — 30 unit tests, all mocked (no Spring context):
+`CreateProduct`(4) · `GetProduct`(3) · `ListProducts`(9) · `SearchProducts`(5) · `UpdateProduct`(6) · `DeleteProduct`(4)
+
+---
 
 ## user-service (Implemented)
 
