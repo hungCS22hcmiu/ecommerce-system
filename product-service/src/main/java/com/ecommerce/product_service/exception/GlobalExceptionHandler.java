@@ -3,6 +3,7 @@ package com.ecommerce.product_service.exception;
 import com.ecommerce.product_service.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -20,6 +21,24 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ApiResponse<?> handleNotFound(ProductNotFoundException ex) {
         return ApiResponse.error("PRODUCT_NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(InsufficientStockException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiResponse<?> handleInsufficientStock(InsufficientStockException ex) {
+        return ApiResponse.error("INSUFFICIENT_STOCK", ex.getMessage());
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiResponse<?> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
+        return ApiResponse.error("CONCURRENT_MODIFICATION", "Resource was modified concurrently, please retry");
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<?> handleIllegalArgument(IllegalArgumentException ex) {
+        return ApiResponse.error("BAD_REQUEST", ex.getMessage());
     }
 
     @ExceptionHandler(ProductAccessDeniedException.class)

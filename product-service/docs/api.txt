@@ -138,3 +138,38 @@ curl -s $BASE/1 | jq .
 # Wrong seller → 403 ACCESS_DENIED
 curl -s -X DELETE $BASE/1 \
   -H "X-Seller-Id: 00000000-0000-0000-0000-000000000000" | jq .
+
+# ── Inventory ─────────────────────────────────────────────────────────────────
+
+INV="http://localhost:8081/api/v1/inventory"
+
+# Get stock level
+curl -s $INV/1 | jq .
+
+# Non-existent product → 404 PRODUCT_NOT_FOUND
+curl -s $INV/99999 | jq .
+
+# Reserve stock (happy path)
+curl -s -X POST $INV/1/reserve \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 5, "referenceId": "order-abc"}' | jq .
+
+# Reserve — insufficient stock → 409 INSUFFICIENT_STOCK
+curl -s -X POST $INV/1/reserve \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 9999, "referenceId": "order-over"}' | jq .
+
+# Reserve — validation error (quantity < 1) → 400
+curl -s -X POST $INV/1/reserve \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 0}' | jq .
+
+# Release stock (happy path; assumes 5 units already reserved)
+curl -s -X POST $INV/1/release \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 3, "referenceId": "order-abc"}' | jq .
+
+# Release — more than reserved → 400 BAD_REQUEST
+curl -s -X POST $INV/1/release \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 999, "referenceId": "order-over"}' | jq .
