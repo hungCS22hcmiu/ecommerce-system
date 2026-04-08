@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,6 +26,9 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
 
     // Ownership check before update/delete
     boolean existsByIdAndSellerId(Long id, UUID sellerId);
+
+    // Top 100 most recently active products — used for cache warming on startup
+    List<Product> findTop100ByStatusOrderByUpdatedAtDesc(ProductStatus status);
 
     // Full-text search using the GIN index: idx_products_fts
     // to_tsvector('english', name || ' ' || COALESCE(description, ''))

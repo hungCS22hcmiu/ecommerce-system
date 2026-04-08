@@ -44,3 +44,10 @@ spring:
 
 server:
   port: 8081
+
+logging:
+  level:
+    # TRACE shows cache hits ("Cache entry found") and misses ("No cache entry")
+    org.springframework.cache: TRACE
+    # DEBUG shows cache warmup start/complete messages
+    com.ecommerce.product_service.service: DEBUG

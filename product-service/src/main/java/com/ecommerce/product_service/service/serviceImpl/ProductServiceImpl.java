@@ -17,6 +17,10 @@ import com.ecommerce.product_service.repository.ProductRepository;
 import com.ecommerce.product_service.service.ProductService;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -37,6 +41,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "productList", allEntries = true)
     public ProductResponse createProduct(UUID sellerId, CreateProductRequest request) {
         Category category = resolveCategory(request.getCategoryId());
 
@@ -60,6 +65,7 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Cacheable(value = "product", key = "#id")
     public ProductResponse getProduct(Long id) {
         Product product = productRepository.findByIdAndStatus(id, ProductStatus.ACTIVE)
                 .orElseThrow(() -> new ProductNotFoundException(id));
@@ -67,6 +73,7 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Cacheable(value = "productList", key = "{#categoryId, #status, #pageable.pageNumber, #pageable.pageSize, #pageable.sort}")
     public Page<ProductSummaryResponse> listProducts(Long categoryId, ProductStatus status, Pageable pageable) {
         ProductStatus effectiveStatus = status != null ? status : ProductStatus.ACTIVE;
 
@@ -86,12 +93,17 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Cacheable(value = "productList", key = "{'search', #query, #pageable.pageNumber, #pageable.pageSize}")
     public Page<ProductSummaryResponse> searchProducts(String query, Pageable pageable) {
         return productRepository.searchActive(query, pageable).map(this::toSummaryResponse);
     }
 
     @Override
     @Transactional
+    @Caching(
+        put  = @CachePut(value = "product", key = "#id"),
+        evict = @CacheEvict(value = "productList", allEntries = true)
+    )
     public ProductResponse updateProduct(Long id, UUID sellerId, UpdateProductRequest request) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ProductNotFoundException(id));
@@ -120,6 +132,10 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
+    @Caching(evict = {
+        @CacheEvict(value = "product", key = "#id"),
+        @CacheEvict(value = "productList", allEntries = true)
+    })
     public void deleteProduct(Long id, UUID sellerId) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ProductNotFoundException(id));

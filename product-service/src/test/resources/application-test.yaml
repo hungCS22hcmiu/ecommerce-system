@@ -1,6 +1,8 @@
 spring:
   cache:
-    type: none
+    # Use in-memory cache for tests — avoids Redis dependency while still exercising
+    # @Cacheable/@CacheEvict/@CachePut AOP behavior with real cache semantics.
+    type: simple
   data:
     redis:
       host: localhost
