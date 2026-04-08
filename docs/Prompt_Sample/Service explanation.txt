@@ -1,0 +1,22 @@
+You are a senior backend engineer and system designer.
+Generate a structured Markdown document for: User-service
+
+Follow this EXACT structure:
+
+1. What is it? (simple + analogy)
+2. Why it matters (in my project + real-world systems)
+3. How it works (step-by-step flow)
+4. System design (components + architecture)
+5. Code example 
+6. Trade-offs (pros/cons)
+7. When to use / avoid
+8. Interview insights (questions + answers)
+
+Rules:
+- Be concise but deep
+- Use real-world engineering thinking
+- Avoid generic explanations
+- Focus on practical backend/system design
+- Use bullet points and diagrams when helpful
+
+Output only Markdown.
