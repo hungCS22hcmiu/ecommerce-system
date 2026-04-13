@@ -1,0 +1,44 @@
+Cart Service API — http://localhost:8002
+========================================
+
+Health
+------
+GET  /health/live    Liveness probe — always 200 if process is running
+GET  /health/ready   Readiness probe — 200 when Postgres + Redis are reachable; 503 otherwise
+
+Cart (all routes require: Authorization: Bearer <access_token>)
+---------------------------------------------------------------
+GET    /api/v1/cart                       Get current user's cart
+                                          Response 200: { success, data: { user_id, status, items[], total, updated_at } }
+
+DELETE /api/v1/cart                       Clear all items from cart (also removes Postgres rows)
+                                          Response 204: no body
+
+POST   /api/v1/cart/items                 Add item to cart (or update quantity if already present)
+                                          Body: { "product_id": <int64>, "quantity": <int 1-999> }
+                                          Response 201: { success, data: CartResponse }
+                                          Errors: 400 VALIDATION_ERROR | 404 product not found
+                                                  503 SERVICE_UNAVAILABLE (product-service down)
+                                                  409 CONCURRENT_UPDATE
+
+PUT    /api/v1/cart/items/:productId      Update quantity of an existing cart item
+                                          Body: { "quantity": <int 1-999> }
+                                          Response 200: { success, data: CartResponse }
+                                          Errors: 400 VALIDATION_ERROR | 404 cart item not found
+                                                  409 CONCURRENT_UPDATE
+
+DELETE /api/v1/cart/items/:productId      Remove a single item from cart
+                                          Response 204: no body
+
+Error envelope
+--------------
+{ "success": false, "error": { "code", "message", "timestamp", "path", "details?" } }
+
+Common error codes
+------------------
+UNAUTHORIZED         Missing or invalid JWT
+VALIDATION_ERROR     Request body failed validation
+NOT_FOUND            Product or cart item does not exist
+SERVICE_UNAVAILABLE  product-service unreachable (add item only)
+CONCURRENT_UPDATE    Redis WATCH/MULTI/EXEC retry exhausted — client should retry
+INTERNAL_ERROR       Unexpected server error

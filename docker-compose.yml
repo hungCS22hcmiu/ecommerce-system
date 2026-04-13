@@ -132,6 +132,8 @@ services:
     container_name: ecommerce-cart-service
     ports:
       - "${CART_SERVICE_PORT:-8002}:8002"
+    volumes:
+      - ./user-service/keys:/app/keys:ro
     environment:
       PORT: "8002"
       DB_HOST: postgres

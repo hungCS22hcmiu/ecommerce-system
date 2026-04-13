@@ -19,6 +19,13 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/config"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/cache"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/client"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/handler"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/middleware"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/repository"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/service"
+	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/cart-service/pkg/jwt"
 )
 
 func main() {
@@ -74,11 +81,31 @@ func main() {
 		"productService", cfg.ProductServiceURL,
 	)
 
+	// ── JWT Public Key ─────────────────────────────────────────────────────────
+	publicKey, err := jwtpkg.LoadPublicKey(cfg.JWTPublicKeyPath)
+	if err != nil {
+		slog.Error("failed to load JWT public key", "error", err)
+		os.Exit(1)
+	}
+
+	// ── Repositories, Client, Service ─────────────────────────────────────────
+	redisRepo := repository.NewRedisCartRepository(rdb)
+	cartRepo := repository.NewCartRepository(db)
+	productClient := client.NewProductClient(cfg.ProductServiceURL)
+	cartSvc := service.NewCartService(redisRepo, cartRepo, productClient)
+
+	// ── Background Sync Worker ─────────────────────────────────────────────────
+	syncCtx, syncCancel := context.WithCancel(context.Background())
+	go cache.StartSyncWorker(syncCtx, rdb, redisRepo, cartRepo)
+	defer syncCancel()
+
 	// ── Router ─────────────────────────────────────────────────────────────────
 	if cfg.Env == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	router := gin.New()
+	router.Use(middleware.Recovery())
+	router.Use(middleware.Logger())
 
 	// Health probes
 	router.GET("/health/live", func(c *gin.Context) {
@@ -111,8 +138,18 @@ func main() {
 		c.JSON(httpStatus, gin.H{"status": overall, "checks": checks, "timestamp": time.Now().UTC()})
 	})
 
-	// API v1 group — cart endpoints added on Day 19
-	// v1 := router.Group("/api/v1")
+	// ── API Routes ────────────────────────────────────────────────────────────
+	cartHandler := handler.NewCartHandler(cartSvc)
+	authMW := middleware.Auth(publicKey)
+
+	v1 := router.Group("/api/v1")
+	cart := v1.Group("/cart")
+	cart.Use(authMW)
+	cart.GET("", cartHandler.GetCart)
+	cart.DELETE("", cartHandler.ClearCart)
+	cart.POST("/items", cartHandler.AddItem)
+	cart.PUT("/items/:productId", cartHandler.UpdateItem)
+	cart.DELETE("/items/:productId", cartHandler.RemoveItem)
 
 	// ── HTTP Server + Graceful Shutdown ────────────────────────────────────────
 	srv := &http.Server{
