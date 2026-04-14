@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-migrate/migrate/v4"
+	pgmigrate "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -18,7 +21,6 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/config"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/handler"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/middleware"
-	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/repository"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/internal/service"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
@@ -80,14 +82,19 @@ func main() {
 	}
 	slog.Info("redis connected", "addr", cfg.RedisAddr())
 
-	// ── AutoMigrate ───────────────────────────────────────────────────────────
-	if err := db.AutoMigrate(
-		&model.User{},
-		&model.UserProfile{},
-		&model.UserAddress{},
-		&model.AuthToken{},
-	); err != nil {
-		slog.Error("automigrate failed", "error", err)
+	// ── Database Migrations ───────────────────────────────────────────────────
+	migDriver, err := pgmigrate.WithInstance(sqlDB, &pgmigrate.Config{})
+	if err != nil {
+		slog.Error("migration driver failed", "error", err)
+		os.Exit(1)
+	}
+	m, err := migrate.NewWithDatabaseInstance("file://migrations", "ecommerce_users", migDriver)
+	if err != nil {
+		slog.Error("migration init failed", "error", err)
+		os.Exit(1)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		slog.Error("migration failed", "error", err)
 		os.Exit(1)
 	}
 	slog.Info("database schema migrated")
