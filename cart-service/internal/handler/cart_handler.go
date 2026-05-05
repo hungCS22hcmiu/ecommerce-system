@@ -141,7 +141,7 @@ func (h *CartHandler) RemoveItem(c *gin.Context) {
 		return
 	}
 	if err := h.cartSvc.RemoveItem(c.Request.Context(), userID, productID); err != nil {
-		response.InternalError(c)
+		handleCartError(c, err)
 		return
 	}
 	response.NoContent(c)
@@ -154,7 +154,7 @@ func (h *CartHandler) ClearCart(c *gin.Context) {
 		return
 	}
 	if err := h.cartSvc.ClearCart(c.Request.Context(), userID); err != nil {
-		response.InternalError(c)
+		handleCartError(c, err)
 		return
 	}
 	response.NoContent(c)

@@ -1,5 +1,5 @@
 You are a senior backend engineer and system designer.
-Generate a structured Markdown document for: User-service
+for each service Generate a structured Markdown (how it works - already in user-service) documents and store in each root servie directory: 
 
 Follow this EXACT structure:
 

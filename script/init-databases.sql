@@ -3,7 +3,7 @@
 -- Table schemas are now managed by per-service migrations:
 --   - product-service, order-service: Flyway
 --   - cart-service, payment-service:  golang-migrate
---   - user-service:                   GORM AutoMigrate
+--   - user-service:                   golang-migrate
 -- ============================================================
 
 CREATE DATABASE ecommerce_users;

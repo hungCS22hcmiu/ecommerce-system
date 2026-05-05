@@ -52,7 +52,7 @@ Three rules for the whole journey:
 
 ---
 
-## Phase 1: Product Service (Month 1 — Weeks 1–4)
+## Phase 1: Product Service (Month 1 — Weeks 1–4) ✅ DONE
 
 ### Why Product Service Next?
 
@@ -65,7 +65,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Flyway migrations managing schema evolution
 - Integration tests hitting real Postgres
 
-### Week 1 — Spring Boot + JPA Foundations
+### Week 1 — Spring Boot + JPA Foundations ✅ DONE
 
 **Learning Topics:**
 - Spring Boot 3 project structure (controllers, services, repositories, entities)
@@ -92,7 +92,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Product CRUD working via curl, tests passing.
 
-### Week 2 — Inventory Management + Optimistic Locking
+### Week 2 — Inventory Management + Optimistic Locking ✅ DONE
 
 **Learning Topics:**
 - Optimistic locking: how `@Version` works in JPA (version column, `OptimisticLockException`)
@@ -117,7 +117,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Concurrent stock reservation demo that you can explain in an interview.
 
-### Week 3 — Redis Caching (Cache-Aside Pattern)
+### Week 3 — Redis Caching (Cache-Aside Pattern) ✅ DONE
 
 **Learning Topics:**
 - Cache-aside pattern: read → check cache → miss → load from DB → write to cache
@@ -141,7 +141,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Product service with Redis caching. You can demonstrate cache behavior with logs.
 
-### Week 4 — Testing, Docs, and Hardening
+### Week 4 — Testing, Docs, and Hardening ✅ DONE
 
 **Implementation:**
 - Write integration tests: full Spring Boot test with `@SpringBootTest` + Testcontainers (or real Postgres)
@@ -157,11 +157,11 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Test product service talking to Postgres in Docker
 - **Reflection exercise:** Write 5 bullet points: "What I learned about Spring Boot that surprised me vs. Go"
 
-**Milestone:** Product Service complete. All endpoints working, cached, tested, documented.
+**Milestone:** ✅ Product Service complete. All endpoints working, cached, tested, documented.
 
 ---
 
-## Phase 2: Cart Service + Order Service (Month 2 — Weeks 5–8)
+## Phase 2: Cart Service + Order Service (Month 2 — Weeks 5–8) ✅ DONE
 
 ### Month 2 Goals
 - Cart service with Redis-first storage + PostgreSQL background sync
@@ -169,7 +169,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Cart → Product Service synchronous REST call working
 - End-to-end flow: browse → add to cart → create order
 
-### Week 5 — Cart Service: Redis-First Design
+### Week 5 — Cart Service: Redis-First Design ✅ DONE
 
 **Learning Topics:**
 - Redis as primary data store (not just cache): durability trade-offs
@@ -202,7 +202,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Cart service working with Redis, validated against product service.
 
-### Week 6 — Cart Background Sync + Auth Integration
+### Week 6 — Cart Background Sync + Auth Integration ✅ DONE
 
 **Learning Topics:**
 - Background goroutines in Go: long-running workers with graceful shutdown
@@ -227,7 +227,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Cart service with Redis-first storage and Postgres durability.
 
-### Week 7 — Order Service: Core + State Machine
+### Week 7 — Order Service: Core + State Machine ✅ DONE
 
 **Learning Topics:**
 - Order state machine: `PENDING → CONFIRMED → SHIPPED → DELIVERED` (and `CANCELLED`, `PAYMENT_FAILED`)
@@ -256,7 +256,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Order service with state machine and pessimistic locking proven by tests.
 
-### Week 8 — End-to-End Flow: Browse → Cart → Order
+### Week 8 — End-to-End Flow: Browse → Cart → Order ✅ DONE
 
 **Implementation:**
 - Wire cart-service → product-service REST calls in Docker network
@@ -277,7 +277,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Document any issues you found and how you fixed them
 - **Reflection exercise:** "What broke during integration that unit tests didn't catch?"
 
-**Milestone:** First end-to-end order flow working. You can demo: register → browse → add to cart → place order.
+**Milestone:** ✅ First end-to-end order flow working. You can demo: register → browse → add to cart → place order.
 
 ---
 
@@ -730,8 +730,8 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 | When | Milestone | Why It Matters |
 |------|-----------|----------------|
-| End of Month 1 | Product Service complete | Second service done, you know both Go and Spring Boot |
-| End of Month 2 | End-to-end order flow | Core business logic works, services talk to each other |
+| End of Month 1 | ✅ Product Service complete | Second service done, you know both Go and Spring Boot |
+| End of Month 2 | ✅ End-to-end order flow | Core business logic works, services talk to each other |
 | End of Month 3 | Kafka saga working | Async distributed transaction — the hardest pattern |
 | End of Month 4 | Tested + hardened | Production-quality code, not just "it works on my machine" |
 | End of Month 5 | AI search working | Differentiating feature that shows breadth |
