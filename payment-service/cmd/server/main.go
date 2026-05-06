@@ -175,12 +175,26 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// 1. Stop consumer fetch loop and drain workers within deadline.
 	consumerCancel()
-	consumer.Wait()
+	consumerDone := make(chan struct{})
+	go func() { consumer.Wait(); close(consumerDone) }()
+	select {
+	case <-consumerDone:
+		slog.Info("consumer drained cleanly")
+	case <-shutdownCtx.Done():
+		slog.Warn("shutdown deadline exceeded — forcing consumer close")
+	}
+
+	// 2. Close Kafka writers (flush any buffered acks).
 	producer.Close()
+
+	// 3. Stop accepting HTTP, drain in-flight requests.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server shutdown error", "error", err)
 	}
+
+	// 4. Close DB pool.
 	sqlDB.Close()
 	slog.Info("payment-service stopped cleanly")
 }

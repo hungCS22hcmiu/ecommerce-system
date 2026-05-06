@@ -168,6 +168,20 @@ GET  /health/ready                      # checks postgres + kafka
 - `internal/gateway/mock_gateway.go` — mock payment gateway (90% success rate)
 - `internal/model/payment.go` — `Payment` + `PaymentHistory` (manual `TableName()` override)
 
-**Resilience:** `StartOffset: kafka.FirstOffset` + manual commit → at-least-once delivery; idempotency key (`orderId`) prevents duplicate processing on redelivery.
+**Resilience (Week 11):**
+- Retry: transient errors retried 3× with 100ms / 200ms / 400ms backoffs; DLQ after exhaustion
+- DLQ (`payments.dlq`): poison pills (deserialize failure) + retry-exhausted messages; enriched with original bytes (base64), stage, attempts, correlationId
+- Permanent decline (`ErrGatewayDeclined`): service returns FAILED payment + nil error → consumer publishes `payments.failed` — no DLQ, no retry
+- Lag logger: `runLagLogger` goroutine fires every 30s; `slog.Warn` if lag > 10,000 messages
+- Graceful shutdown: 30-second deadline covers consumer drain; force-closes if exceeded
 
-**E2E test:** `bash script/e2e-payment.sh` — full saga: login → create order → poll payment → verify CONFIRMED order → health check (12 assertions).
+**Tests:**
+- `internal/service/payment_service_test.go` — 6 unit tests (mock repo + gateway)
+- `internal/integration/payment_idempotency_test.go` — concurrent idempotency proof (10 goroutines, 1 winner)
+- `internal/integration/payment_kafka_test.go` — 4 Kafka resilience tests (testcontainers): poison DLQ, retry exhaustion DLQ, permanent decline no-DLQ, duplicate delivery idempotency
+
+**Scripts:**
+- `bash script/e2e-payment.sh` — full saga: login → create order → poll payment → verify CONFIRMED order → health check (12 assertions)
+- `bash script/loadtest-orders.sh` — 100 orders at 10 concurrent, asserts 0 PENDING + 0 DLQ
+
+**Docs:** `docs/adrs/saga-resilience.md` · `payment-service/README.md`

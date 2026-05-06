@@ -107,6 +107,8 @@ func (c *Consumer) Run(ctx context.Context) {
 		go c.runWorker(ctx, i)
 	}
 
+	go c.runLagLogger(ctx)
+
 	// Fetch loop: push messages onto the jobs channel until ctx is cancelled.
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
@@ -263,6 +265,33 @@ func (c *Consumer) publishOutcome(ctx context.Context, payment *model.Payment, c
 	default:
 		// PENDING means ProcessPayment left it in a transient state — not a publish error.
 		return nil
+	}
+}
+
+// runLagLogger logs consumer lag every 30 seconds and warns if lag exceeds 10,000 messages.
+func (c *Consumer) runLagLogger(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stats := c.reader.Stats()
+			highWatermark := stats.Offset + stats.Lag
+			fields := []any{
+				"topic", stats.Topic,
+				"partition", stats.Partition,
+				"lag", stats.Lag,
+				"offset", stats.Offset,
+				"highWatermark", highWatermark,
+			}
+			if stats.Lag > 10_000 {
+				slog.Warn("kafka.lag: consumer lag above alert threshold", fields...)
+			} else {
+				slog.Info("kafka.lag", fields...)
+			}
+		}
 	}
 }
 
