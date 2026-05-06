@@ -2,7 +2,9 @@ package kafka
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"github.com/segmentio/kafka-go"
 
 	"github.com/hungCS22hcmiu/ecommrece-system/payment-service/config"
+	"github.com/hungCS22hcmiu/ecommrece-system/payment-service/internal/gateway"
 	kafkaevent "github.com/hungCS22hcmiu/ecommrece-system/payment-service/internal/kafka/event"
 	"github.com/hungCS22hcmiu/ecommrece-system/payment-service/internal/model"
 	"github.com/hungCS22hcmiu/ecommrece-system/payment-service/internal/service"
@@ -20,6 +23,45 @@ import (
 type contextKey string
 
 const correlationIDKey contextKey = "correlationId"
+
+// backoffs defines the wait between successive ProcessPayment attempts.
+// 4 total attempts: initial + 3 retries at 100 ms / 200 ms / 400 ms.
+var backoffs = []time.Duration{
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+}
+
+// errKind classifies ProcessPayment errors for retry/DLQ decisions.
+type errKind int
+
+const (
+	errKindTransient errKind = iota // DB blip, context deadline — retry
+	errKindPermanent                // ErrGatewayDeclined — no retry, DLQ
+)
+
+// classifyError returns errKindPermanent for business-permanent failures and
+// errKindTransient for everything else.
+func classifyError(err error) errKind {
+	if errors.Is(err, gateway.ErrGatewayDeclined) {
+		return errKindPermanent
+	}
+	return errKindTransient
+}
+
+// DLQMessage is the envelope written to payments.dlq for failed messages.
+type DLQMessage struct {
+	OriginalTopic     string `json:"originalTopic"`
+	OriginalPartition int    `json:"originalPartition"`
+	OriginalOffset    int64  `json:"originalOffset"`
+	OriginalKey       string `json:"originalKey"`
+	OriginalValue     string `json:"originalValue"` // base64-encoded raw bytes
+	ErrorReason       string `json:"errorReason"`
+	ErrorStage        string `json:"errorStage"` // "deserialize" | "process"
+	Attempts          int    `json:"attempts"`
+	FailedAt          string `json:"failedAt"` // RFC3339 UTC
+	CorrelationID     string `json:"correlationId"`
+}
 
 // Consumer subscribes to orders.created and dispatches to a worker pool.
 type Consumer struct {
@@ -111,33 +153,55 @@ func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message, worker
 		"offset", msg.Offset,
 	}
 
+	// 1. Deserialize — poison pill goes straight to DLQ.
 	var evt kafkaevent.OrderCreatedEvent
 	if err := json.Unmarshal(msg.Value, &evt); err != nil {
-		// Poison pill — log and commit. Week 11 will route to DLQ instead.
-		slog.Error("kafka.worker: deserialize failed — committing poison pill",
-			append(logBase, "error", err)...)
+		if dlqErr := c.sendToDLQ(msgCtx, msg, err.Error(), "deserialize", 1, correlationID, logBase); dlqErr != nil {
+			return // DLQ publish failed — don't commit, redeliver on restart
+		}
 		_ = c.reader.CommitMessages(msgCtx, msg)
 		return
 	}
 
 	logBase = append(logBase, "orderId", evt.OrderID)
 
-	payment, err := c.svc.ProcessPayment(msgCtx, service.ProcessPaymentInput{
+	// 2. ProcessPayment with retry (initial attempt + up to 3 retries).
+	input := service.ProcessPaymentInput{
 		OrderID:        evt.OrderID,
 		UserID:         evt.UserID,
 		Amount:         evt.TotalAmount,
 		Currency:       "USD",
 		IdempotencyKey: evt.OrderID.String(), // ADR locking-strategy §5
-	})
-	if err != nil {
-		// Transient error — log and commit. Week 11 will add retry + DLQ.
-		slog.Error("kafka.worker: ProcessPayment failed — committing for now",
-			append(logBase, "error", err)...)
+	}
+
+	var payment *model.Payment
+	var lastErr error
+	attempts := 0
+	for ; attempts <= len(backoffs); attempts++ {
+		payment, lastErr = c.svc.ProcessPayment(msgCtx, input)
+		if lastErr == nil || classifyError(lastErr) == errKindPermanent {
+			break
+		}
+		slog.Warn("kafka.worker: ProcessPayment transient error, retrying",
+			append(logBase, "attempt", attempts+1, "error", lastErr)...)
+		if attempts < len(backoffs) {
+			select {
+			case <-msgCtx.Done():
+				return // shutting down mid-retry; don't commit
+			case <-time.After(backoffs[attempts]):
+			}
+		}
+	}
+
+	if lastErr != nil {
+		if dlqErr := c.sendToDLQ(msgCtx, msg, lastErr.Error(), "process", attempts+1, correlationID, logBase); dlqErr != nil {
+			return // DLQ publish failed — don't commit, redeliver
+		}
 		_ = c.reader.CommitMessages(msgCtx, msg)
 		return
 	}
 
-	// Publish the outcome event so order-service can transition order status.
+	// 3. Publish the outcome event so order-service can transition order status.
 	if publishErr := c.publishOutcome(msgCtx, payment, correlationID); publishErr != nil {
 		slog.Error("kafka.worker: publish outcome failed",
 			append(logBase, "paymentStatus", payment.Status, "error", publishErr)...)
@@ -152,6 +216,35 @@ func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message, worker
 
 	slog.Info("kafka.worker: processed",
 		append(logBase, "paymentStatus", payment.Status)...)
+}
+
+// sendToDLQ marshals a DLQMessage and publishes it to payments.dlq.
+// Returns non-nil if the DLQ publish itself failed — callers must NOT commit in that case.
+func (c *Consumer) sendToDLQ(ctx context.Context, msg kafka.Message,
+	reason, stage string, attempts int, correlationID string, logBase []any) error {
+
+	payload := DLQMessage{
+		OriginalTopic:     msg.Topic,
+		OriginalPartition: msg.Partition,
+		OriginalOffset:    msg.Offset,
+		OriginalKey:       string(msg.Key),
+		OriginalValue:     base64.StdEncoding.EncodeToString(msg.Value),
+		ErrorReason:       reason,
+		ErrorStage:        stage,
+		Attempts:          attempts,
+		FailedAt:          time.Now().UTC().Format(time.RFC3339),
+		CorrelationID:     correlationID,
+	}
+	raw, _ := json.Marshal(payload) // only primitives; cannot fail
+
+	if err := c.producer.PublishDLQ(ctx, raw, reason, correlationID); err != nil {
+		slog.Error("kafka.worker: DLQ publish failed — message will be redelivered",
+			append(logBase, "errorStage", stage, "error", err)...)
+		return err
+	}
+	slog.Warn("kafka.worker: message routed to DLQ",
+		append(logBase, "errorStage", stage, "errorReason", reason, "attempts", attempts)...)
+	return nil
 }
 
 func (c *Consumer) publishOutcome(ctx context.Context, payment *model.Payment, correlationID string) error {

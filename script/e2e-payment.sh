@@ -5,8 +5,9 @@
 # Usage:
 #   bash script/e2e-payment.sh
 #
-# Override service URLs:
+# Override service URLs or product:
 #   ORDER_SVC=http://localhost:8082 PAYMENT_SVC=http://localhost:8003 bash script/e2e-payment.sh
+#   PRODUCT_ID=3 bash script/e2e-payment.sh
 
 set -euo pipefail
 
@@ -70,51 +71,80 @@ fi
 info "user_id = $USER_ID"
 info "token   = ${ACCESS_TOKEN:0:40}..."
 
-# ── Step 2: Get a product ──────────────────────────────────────────────────────
-# Use the single-product endpoint (paginated list has a pre-existing Spring PageImpl/Redis issue).
+# ── Step 2: Pick a product with available stock ────────────────────────────────
+# product-service caches stock via Redis (30 min TTL), so stockQuantity can be stale.
+# Use the single-product endpoint; auto-scan ids 1–10 unless PRODUCT_ID is set.
 echo ""
-echo -e "${BOLD}Step 2: Pick product id=1 (Laptop ProBook)${RESET}"
-PRODUCT_ID="${PRODUCT_ID:-1}"
-status=$(request GET "$PRODUCT_SVC/api/v1/products/$PRODUCT_ID")
-assert_status "Get product $PRODUCT_ID" "200" "$status"
+echo -e "${BOLD}Step 2: Pick a product with available stock${RESET}"
+if [[ -n "${PRODUCT_ID:-}" ]]; then
+  CANDIDATE_IDS=("$PRODUCT_ID")
+else
+  CANDIDATE_IDS=(1 2 3 4 5 6 7 8 9 10)
+fi
 
-PRODUCT_NAME=$(jq -r '.data.name' "$BODY_FILE")
-if [[ -z "$PRODUCT_NAME" || "$PRODUCT_NAME" == "null" ]]; then
-  echo -e "${RED}Fatal: product $PRODUCT_ID not found. Ensure seed data is applied.${RESET}"
+PRODUCT_ID=""
+PRODUCT_NAME=""
+for cid in "${CANDIDATE_IDS[@]}"; do
+  pstatus=$(request GET "$PRODUCT_SVC/api/v1/products/$cid")
+  if [[ "$pstatus" == "200" ]]; then
+    pname=$(jq -r '.data.name // empty' "$BODY_FILE")
+    if [[ -n "$pname" ]]; then
+      PRODUCT_ID="$cid"
+      PRODUCT_NAME="$pname"
+      pass "Found product $cid: $pname"
+      break
+    fi
+  fi
+done
+
+if [[ -z "$PRODUCT_ID" ]]; then
+  echo -e "${RED}Fatal: no product found (ids 1–10). Ensure seed data is applied.${RESET}"
   exit 1
 fi
 info "product_id   = $PRODUCT_ID"
 info "product_name = $PRODUCT_NAME"
 
 # ── Step 3: Create order (triggers OrderCreatedEvent → orders.created) ─────────
+# Retry across candidate products because Redis-cached stockQuantity may be stale.
 echo ""
 echo -e "${BOLD}Step 3: Create order${RESET}"
 
-CART_UUID=$(python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+ORDER_ID=""
+ORDER_STATUS_INITIAL=""
+for cid in "${CANDIDATE_IDS[@]}"; do
+  CART_UUID=$(python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  ORDER_PAYLOAD=$(jq -n \
+    --arg cartId "$CART_UUID" \
+    --argjson productId "$cid" \
+    '{
+      cartId: $cartId,
+      items: [{ productId: $productId, quantity: 1 }],
+      shippingAddress: {
+        street: "123 Saga Street",
+        city: "Ho Chi Minh City",
+        state: "HCM",
+        country: "Vietnam",
+        zipCode: "70000"
+      }
+    }')
+  ostatus=$(request POST "$ORDER_SVC/api/v1/orders" \
+    -H "Content-Type: application/json" \
+    -H "X-User-Id: $USER_ID" \
+    -d "$ORDER_PAYLOAD")
+  if [[ "$ostatus" == "201" ]]; then
+    PRODUCT_ID="$cid"
+    ORDER_ID=$(jq -r '.data.id' "$BODY_FILE")
+    ORDER_STATUS_INITIAL=$(jq -r '.data.status' "$BODY_FILE")
+    break
+  fi
+done
 
-ORDER_PAYLOAD=$(jq -n \
-  --arg cartId "$CART_UUID" \
-  --argjson productId "$PRODUCT_ID" \
-  '{
-    cartId: $cartId,
-    items: [{ productId: $productId, quantity: 1 }],
-    shippingAddress: {
-      street: "123 Saga Street",
-      city: "Ho Chi Minh City",
-      state: "HCM",
-      country: "Vietnam",
-      zipCode: "70000"
-    }
-  }')
+if [[ -z "$ORDER_ID" || "$ORDER_ID" == "null" ]]; then
+  fail "Could not create order — all candidate products out of stock. Reseed stock data."
+  exit 1
+fi
 
-status=$(request POST "$ORDER_SVC/api/v1/orders" \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: $USER_ID" \
-  -d "$ORDER_PAYLOAD")
-assert_status "Create order" "201" "$status"
-
-ORDER_ID=$(jq -r '.data.id' "$BODY_FILE")
-ORDER_STATUS_INITIAL=$(jq -r '.data.status' "$BODY_FILE")
+pass "Create order (product_id=$PRODUCT_ID, HTTP 201)"
 info "order_id            = $ORDER_ID"
 info "order_status (initial) = $ORDER_STATUS_INITIAL"
 
