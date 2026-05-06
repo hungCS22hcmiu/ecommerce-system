@@ -1,8 +1,8 @@
 # 6-Month Execution Plan — Distributed E-Commerce Platform
 
 **Start Date:** March 2026
-**End Date:** September 2026
-**Budget:** 18 hours/week × 26 weeks = **468 hours**
+**End Date:** October 2026
+**Budget:** 18 hours/week × 30 weeks = **540 hours**
 **Author:** Hung (with mentorship structure from senior engineer perspective)
 
 ---
@@ -491,15 +491,298 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 ---
 
-## Phase 5: AI Product Search with RAG (Month 5 — Weeks 17–20)
+## Phase 5: React Frontend (Month 5 — Weeks 17–20)
+
+### Why Add a Frontend?
+
+The backend is production-quality — but a portfolio project that no one can see without `curl` is harder to demo than one with a working UI. Four weeks of focused React work gives you a browser-accessible demo for every interview, forces you to consume your own APIs as a real client (which always reveals contract gaps), and adds a concrete full-stack story on top of the distributed backend depth you already have.
+
+This phase is **not about becoming a frontend engineer**. It is about building enough UI to showcase the backend patterns you already know: the JWT refresh flow, the Kafka saga's async payment status, the order state machine timeline. The goal is a functional, clean UI — not a pixel-perfect design system.
 
 ### Month 5 Goals
+- React 18 + TypeScript project scaffolded and dockerized
+- JWT auth flow with queue-based 401 interceptor
+- Product catalog with search and pagination
+- Cart with optimistic updates
+- Checkout → order creation → payment polling (saga visible in browser)
+- Order history with status timeline
+- Profile and address management
+
+### Tech Stack
+
+| Tool | Version | Reason |
+|------|---------|--------|
+| **React 18 + TypeScript** | latest | Type safety catches API contract mismatches at compile time |
+| **Vite** | 5.x | Fast HMR dev server; faster Docker builds than CRA |
+| **TanStack Query** | 5.x | Server state, caching, polling (`refetchInterval`) — eliminates manual useEffect+useState for every API call |
+| **Zustand** | 4.x | accessToken in memory (XSS-safe), cart item count badge — two stores, zero boilerplate |
+| **Axios** | 1.x | Interceptor API for 401→refresh→retry; cleaner than native fetch for this pattern |
+| **React Router** | v6.4+ | `<Outlet>` for protected route wrappers; `useSearchParams` for URL-driven pagination |
+| **Tailwind CSS** | 3.x | Utility-first; faster to write for a solo dev than maintaining CSS files |
+| **shadcn/ui** | latest | Copies component source into repo; Tailwind-native; accessible. Use: Button, Input, Badge, Skeleton, Dialog, Table, Sheet, Toast |
+
+**Not adding:** Redux, GraphQL, Next.js, react-hook-form (too much ceremony for this project size).
+
+### Project Structure
+
+```
+frontend/
+├── src/
+│   ├── lib/
+│   │   ├── axios.ts          # Axios instance + queue-based 401 interceptor
+│   │   ├── queryClient.ts    # TanStack Query global config
+│   │   └── utils.ts          # cn(), formatCurrency, formatDate
+│   ├── store/
+│   │   ├── authStore.ts      # Zustand: accessToken (memory), userId, email
+│   │   └── cartStore.ts      # Zustand: itemCount for Navbar badge
+│   ├── types/                # api.ts, auth.ts, product.ts, cart.ts, order.ts, payment.ts
+│   ├── components/
+│   │   ├── ui/               # shadcn/ui copies
+│   │   ├── layout/           # Navbar, Footer, PageLayout
+│   │   └── shared/           # LoadingSpinner, ErrorMessage, EmptyState, Pagination
+│   ├── features/
+│   │   ├── auth/             # LoginForm, RegisterForm, useAuth, authApi, ProtectedRoute
+│   │   ├── products/         # ProductCard, ProductGrid, SearchBar, useProducts, productApi
+│   │   ├── cart/             # CartDrawer, CartItem, useCart, useCartMutations, cartApi
+│   │   ├── orders/           # OrderList, OrderDetail, OrderTimeline, CheckoutForm, orderApi
+│   │   ├── payment/          # PaymentStatusPoller, usePaymentStatus, paymentApi
+│   │   └── profile/          # ProfileForm, AddressManager, profileApi
+│   └── pages/                # One file per route (see routes table below)
+├── vite.config.ts            # proxy /api → localhost:80
+└── .env.local                # VITE_API_BASE_URL=http://localhost/api/v1
+```
+
+### Pages / Routes
+
+| Route | Page | Auth | Data Sources |
+|-------|------|------|-------------|
+| `/` | HomePage | No | GET /products (first 8) |
+| `/login` | LoginPage | No (redirect if authed) | — |
+| `/register` | RegisterPage | No | — |
+| `/products` | ProductListPage | No | GET /products?page=&q= |
+| `/products/:id` | ProductDetailPage | No | GET /products/:id, GET /inventory/:id |
+| `/cart` | CartPage | Yes | GET /cart |
+| `/checkout` | CheckoutPage | Yes | GET /cart, GET /users/profile |
+| `/orders/:id/confirmation` | OrderConfirmationPage | Yes | GET /orders/:id, GET /payments/order/:id (polled) |
+| `/orders` | OrderHistoryPage | Yes | GET /orders?page= |
+| `/orders/:id` | OrderDetailPage | Yes | GET /orders/:id, GET /orders/:id/history |
+| `/profile` | ProfilePage | Yes | GET /users/profile |
+
+### Week 17 — Project Setup + Auth Flow
+
+**Learning Topics:**
+- React component model vs Go handlers: where does business logic live?
+- TypeScript generics for `ApiResponse<T>` — one type covers every envelope shape
+- Why accessToken in memory (Zustand), not localStorage: XSS threat model
+- Queue-based Axios interceptor: how to hold concurrent requests during a token refresh
+- React Router v6 `<Outlet>` pattern for protected route wrappers
+
+**Implementation:**
+- Scaffold: `npm create vite@latest frontend -- --template react-ts`, add all deps, configure Tailwind + shadcn/ui
+- Add Vite proxy in `vite.config.ts`: `/api` → `http://localhost:80` (eliminates CORS in dev)
+- Define all shared types in `src/types/` first — TypeScript guides everything else
+- Implement `src/lib/axios.ts`:
+  - Request interceptor: attach `Authorization: Bearer <token>` from Zustand
+  - Response interceptor: on 401, set `isRefreshing = true`, call `POST /auth/refresh`, store new token, flush `failedQueue` with new token; on second 401, clear auth + redirect to `/login`
+  - `failedQueue`: array of `{ resolve, reject }` — queues requests that arrive while refresh is in flight, replays them all once the new token is ready
+- Implement `authStore.ts`: `accessToken` (memory only), `refreshToken` (localStorage), `userId`, `email`, `setToken()`, `clearToken()`
+- Implement `authApi.ts`, `LoginForm.tsx`, `RegisterForm.tsx`
+- Implement `ProtectedRoute.tsx`: check `accessToken`; if null, attempt silent refresh; if that fails, redirect to `/login?from=<path>`
+- Wire `LoginPage`, `RegisterPage`, router, `Navbar` with auth-aware state
+
+**Review/Test:**
+- Register → login → navigate to `/profile` → page loads without redirect
+- Token expiry: clear access token from Zustand devtools → navigate → silent refresh fires → page loads
+- Network tab: `Authorization` header on every protected request
+- Two simultaneous requests on stale page: both succeed (queue mechanism works)
+
+**Deliverable:** Login, register, protected routes working. JWT interceptor with queue-based refresh proven by manual test.
+
+### Week 18 — Product Catalog
+
+**Learning Topics:**
+- TanStack Query: `useQuery` lifecycle, `queryKey` design, `staleTime` vs `gcTime`
+- URL-driven pagination: `page` and `size` in query params, `useSearchParams`
+- Debounce: 300ms delay before updating search query key — avoid request-per-keystroke
+- Smart (data-fetching) vs presentational (props-only) component split
+
+**Implementation:**
+- `productApi.ts`: list (paginated, filterable), get by ID, search
+- `useProducts(params)`: `queryKey: ['products', params]`, `staleTime: 30_000`
+- `useProduct(id)`: `staleTime: 30 * 60 * 1000` (matches backend's 30-min cache)
+- `useProductSearch(query)`: `enabled: query.length >= 2`, debounced query key
+- `ProductCard.tsx`: name, price, stock badge (In Stock / Low Stock / Out of Stock), Add to Cart (disabled if stock=0)
+- `ProductGrid.tsx`: maps to `ProductCard`, shows 8 `<Skeleton>` cards while loading
+- `Pagination.tsx`: reads `PaginationMeta` from response, renders page controls
+- `ProductListPage.tsx`: `SearchBar` + `ProductGrid` + `Pagination`, URL-driven state via `useSearchParams`
+- `ProductDetailPage.tsx`: description, price, stock, quantity selector, Add to Cart button
+
+**Review/Test:**
+- Navigate product list → view detail → back → no network request (TanStack Query cache hit)
+- Search: 1 character → no request; 2 characters → request fires after 300ms
+- Skeleton loading appears before data; never a blank page
+- Out of Stock product: Add to Cart disabled
+- Copy page 2 URL → open new tab → page 2 loads directly (URL-driven state)
+
+**Deliverable:** Full product catalog browsable with search, pagination, and detail page.
+
+### Week 19 — Cart + Checkout + Order + Payment Polling
+
+This is the most technically complex week. Three features connect in sequence; the payment polling pattern is unique to this system.
+
+**Learning Topics:**
+- TanStack Query optimistic updates: `onMutate` snapshot → optimistic cache write → `onError` rollback → `onSettled` invalidate
+- `refetchInterval` as a function: return `false` to stop, a number to continue — stop when payment status is terminal
+- The order saga from the browser's perspective: POST /orders returns immediately PENDING; frontend polls GET /payments/order/:id until terminal
+- `useMutation` (imperative, user action) vs `useQuery` (declarative, always-up-to-date)
+
+**Implementation:**
+
+*Cart (Days 1–2):*
+- `cartApi.ts`: GET cart, POST add item, PUT update qty, DELETE item, DELETE cart
+- `useCart()`: `queryKey: ['cart']`, `enabled: !!accessToken`
+- `useCartMutations()`:
+  - `addItem`: optimistic add to cached cart in `onMutate`; snapshot returned for rollback; `cartStore.setItemCount` updated immediately for Navbar badge; `onError` rolls back; `onSettled` invalidates `['cart']`
+  - `updateQuantity`, `removeItem`: same optimistic pattern
+- `CartDrawer.tsx`: shadcn/ui Sheet (slide-over), triggered by Navbar cart icon, shows `CartItem` list + "Proceed to Checkout"
+- Wire "Add to Cart" on `ProductCard` and `ProductDetailPage` to `useCartMutations().addItem`
+
+*Checkout + Order Creation (Days 3–4):*
+- `orderApi.ts`: POST create, GET list, GET by ID, PUT cancel, GET history
+- `CheckoutPage.tsx`: cart summary, address selector from `GET /users/profile` (radio group of saved addresses), "Place Order" calls `POST /orders`
+- `useCreateOrder()`: `useMutation`; on `onSuccess`, invalidate `['cart']`, navigate to `/orders/:id/confirmation`
+
+*Payment Polling + Confirmation (Days 5–6):*
+- `paymentApi.ts`: GET by order ID, GET list
+- `usePaymentStatus(orderId)`:
+  ```typescript
+  const TERMINAL = ['CONFIRMED', 'PAYMENT_FAILED', 'CANCELLED'];
+  useQuery({
+    queryKey: ['payment', 'order', orderId],
+    queryFn: () => paymentApi.getByOrderId(orderId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.data?.status;
+      return TERMINAL.includes(status) ? false : 2000;
+    },
+    refetchIntervalInBackground: true,
+  })
+  ```
+- `PaymentStatusPoller.tsx`: spinner while PENDING, success state on CONFIRMED, error state on PAYMENT_FAILED
+- `OrderConfirmationPage.tsx`: order summary + `PaymentStatusPoller`; auto-redirects to order detail 3s after terminal status
+
+**Review/Test:**
+- Optimistic update: click Add to Cart → Navbar badge increments before network response
+- Optimistic rollback: disable network → click Add to Cart → cart reverts on error
+- Polling: place order → watch confirmation page → status changes PENDING → CONFIRMED without page refresh
+- Polling stop: once terminal, Network tab shows no more GET /payments/order/:id requests
+
+**Deliverable:** Complete purchase flow in browser. Add to cart → checkout → place order → payment polled → confirmation shown. The Kafka saga is visible.
+
+### Week 20 — Order History + Profile + Polish
+
+**Learning Topics:**
+- React error boundaries: query `error` state vs `<ErrorBoundary>` — when to use each
+- Loading state hierarchy: page Suspense vs component Skeleton vs inline spinner
+- Accessible UI: focus management after form submit, `aria-label` on icon buttons
+- Production build: `npm run build` must have zero TypeScript errors
+
+**Implementation:**
+
+*Order History + Detail (Days 1–2):*
+- `useOrders(params)`: paginated, `queryKey: ['orders', params]`
+- `useOrder(id)`: single order with history
+- `OrderList.tsx`: shadcn/ui Table — ID (truncated), status Badge, total, date, View link
+- `OrderTimeline.tsx`: vertical timeline from `order_status_history`; status colors: PENDING=gray, CONFIRMED=blue, SHIPPED=orange, DELIVERED=green, CANCELLED/PAYMENT_FAILED=red
+- `OrderDetailPage.tsx`: order items table + `OrderTimeline` + cancel button (only if PENDING or CONFIRMED)
+- Cancel mutation: `PUT /orders/:id/cancel`; on success, invalidate `['orders']` + `['orders', id]`
+
+*Profile + Address Management (Days 3–4):*
+- `profileApi.ts`: GET/PUT profile, POST/PUT/DELETE/default address
+- `ProfileForm.tsx`: update firstName/lastName; Toast on success
+- `AddressManager.tsx`: list addresses with Edit/Delete/Set Default; "Add New" opens a Dialog; default address highlighted with Badge; default pre-selected on checkout
+
+*Polish (Days 5–6):*
+- Audit every `useQuery`: every failure state renders `<ErrorMessage>` with envelope's `error.message`
+- Audit every page: skeleton on first load, never blank page
+- Audit for empty states: empty cart, empty order history, no search results
+- Axios catch-all: network errors show a global Toast
+- Dockerize: `frontend/Dockerfile` (multi-stage: `npm run build` → serve with Nginx); add to `docker-compose.yml`; update root Nginx to serve the Vite build at `/`
+- `frontend/README.md`: dev mode, Docker build
+
+**Review/Test:**
+- Full demo: register → browse → add to cart → checkout → payment polls to CONFIRMED → order history shows new order → OrderTimeline shows full progression
+- Cancel flow: place order → cancel → OrderTimeline shows CANCELLED, cancel button disappears
+- Address: add two addresses → set second as default → pre-selected on checkout
+- Error state: stop a backend service → product page shows `<ErrorMessage>`, app does not crash
+- `npm run build` → zero TypeScript errors
+
+**Milestone:** A fully functional e-commerce frontend connected to the real backend. Every feature visible in a browser with zero curl commands. The Kafka saga is transparent to the user.
+
+---
+
+### Key Technical Patterns — Reference
+
+#### Queue-Based JWT Refresh
+
+```
+accessToken  → Zustand (memory only) — cleared on page refresh by design
+refreshToken → localStorage — cleared on explicit logout
+```
+
+On 401:
+1. First request sets `isRefreshing = true`, calls `POST /auth/refresh`
+2. All subsequent 401s during the refresh push onto `failedQueue: { resolve, reject }[]`
+3. On refresh success: store new token → replay all queued requests with new token
+4. On refresh failure: reject all queued → clear auth state → redirect to `/login`
+
+Without the queue, 5 simultaneous components on a stale page each trigger a refresh — 4 fail because the refresh token is already rotated after the first use.
+
+#### Payment Polling Pattern
+
+`refetchInterval` as a function: the query stops polling itself when it sees terminal data — no `clearInterval`, no `useEffect` cleanup, no memory leaks.
+
+#### Optimistic Cart Updates
+
+`onMutate` snapshots the cache → applies the change locally → `onError` restores the snapshot → `onSettled` always re-syncs with server. This gives instant UI response while remaining correct under failure.
+
+---
+
+### What You MUST Understand Deeply (Frontend Addition)
+
+| Understand Deeply (Do Manually) | OK to Use AI Assistance |
+|---|---|
+| Why accessToken in memory and not localStorage (XSS threat model) | Tailwind class names and layout utilities |
+| How the queue-based 401 interceptor prevents duplicate refresh requests | shadcn/ui component setup and variants |
+| Why `refetchInterval` returning `false` stops polling (query lifecycle) | TypeScript generic type definitions |
+| How optimistic updates roll back on failure (snapshot/context pattern) | React Router v6 nested route syntax |
+
+---
+
+### Interview Questions This Frontend Adds
+
+**"Why do you store the access token in memory instead of localStorage?"**
+Tokens in localStorage are readable by any JavaScript on the page — including injected scripts from XSS. In-memory Zustand storage means a compromised script can't exfiltrate the token. The trade-off: the token disappears on page refresh, requiring a silent refresh on every page load. In production you'd use HttpOnly cookies for the refresh token so the browser manages it entirely and JavaScript can't touch it.
+
+**"How does your frontend handle concurrent API calls when the access token expires?"**
+Without a queue, five components mounting simultaneously on a stale page each get a 401 and each try to refresh — four fail because the refresh token is already rotated after the first use. My interceptor sets `isRefreshing = true` on the first 401, queues all subsequent requests as `{ resolve, reject }` promises, and replays them all once the single refresh succeeds. This is the same concurrency problem solved in the backend with idempotency keys — expressed in JavaScript promise queues.
+
+**"Walk me through what happens from 'Place Order' to 'Order Confirmed.'"**
+POST /orders validates cart, reserves stock, creates PENDING order, publishes `orders.created` to Kafka, returns 201 with orderId. Frontend redirects to confirmation page where `usePaymentStatus` polls `GET /payments/order/:id` every 2 seconds. Payment-service consumer processes the charge asynchronously and publishes `payments.completed` or `payments.failed`. Order-service consumer transitions the order. Next poll returns the terminal status, `refetchInterval` returns `false`, polling stops, UI shows success or failure. The Kafka saga is transparent to the user.
+
+**"Why TanStack Query over useEffect + useState?"**
+Manual `useEffect` for data fetching requires you to handle: loading state, error state, deduplication, cache invalidation after mutations, background refetch, and retry. TanStack Query handles all of that. For this project: `refetchInterval` with a conditional stop function is 3 lines; building it correctly with `useEffect` requires a cleanup function, a ref for the interval, and careful unmount handling — most implementations get the cleanup wrong and leak.
+
+---
+
+## Phase 6: AI Product Search with RAG (Month 6 — Weeks 21–24)
+
+### Month 6 Goals
 - Understand embeddings and vector similarity search
 - Build a realistic RAG-powered product search
 - Integrate with real product data from your database
 - Keep it simple but genuinely functional
 
-### Week 17 — Embeddings + Vector DB Fundamentals
+### Week 21 — Embeddings + Vector DB Fundamentals
 
 **Learning Topics:**
 - What are embeddings? How text → vector works
@@ -522,7 +805,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Hand-drawn RAG architecture. Understanding of embeddings proven by explaining it in your own words.
 
-### Week 18 — pgvector Setup + Product Embedding Pipeline
+### Week 22 — pgvector Setup + Product Embedding Pipeline
 
 **Learning Topics:**
 - pgvector installation (Docker: `ankane/pgvector` image or enable extension in Postgres)
@@ -544,7 +827,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** All products have embeddings. Raw SQL similarity search works.
 
-### Week 19 — Search API Endpoint in Product Service
+### Week 23 — Search API Endpoint in Product Service
 
 **Implementation:**
 - Add new endpoint to product-service:
@@ -569,7 +852,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** AI-powered product search working. Demonstrably better than keyword search for natural language queries.
 
-### Week 20 — RAG Polish + Embedding Refresh Pipeline
+### Week 24 — RAG Polish + Embedding Refresh Pipeline
 
 **Implementation:**
 - Add embedding refresh: when a product is created/updated, re-embed it
@@ -590,15 +873,15 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 ---
 
-## Phase 6: AWS Deployment + CI/CD + Interview Prep (Month 6 — Weeks 21–26)
+## Phase 7: AWS Deployment + CI/CD + Interview Prep (Month 7 — Weeks 25–30)
 
-### Month 6 Goals
+### Month 7 Goals
 - Deploy the system to AWS
 - CI/CD pipeline with GitHub Actions
 - Documentation and demo preparation
 - Interview-ready project presentation
 
-### Week 21 — AWS Fundamentals
+### Week 25 — AWS Fundamentals
 
 **Learning Topics:**
 - AWS core services for your stack:
@@ -620,7 +903,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** System running on AWS EC2.
 
-### Week 22 — Managed Services: RDS + ElastiCache
+### Week 26 — Managed Services: RDS + ElastiCache
 
 **Learning Topics:**
 - Why managed services: backups, patching, scaling, monitoring — handled by AWS
@@ -640,7 +923,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** System running on EC2 with managed RDS and ElastiCache.
 
-### Week 23 — CI/CD with GitHub Actions
+### Week 27 — CI/CD with GitHub Actions
 
 **Learning Topics:**
 - GitHub Actions: workflows, triggers, jobs, steps
@@ -663,7 +946,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Push to main → tests run → images built → deployed to AWS.
 
-### Week 24 — Monitoring + Final Hardening
+### Week 28 — Monitoring + Final Hardening
 
 **Implementation:**
 - Add CloudWatch basics: EC2 CPU/memory monitoring, RDS metrics
@@ -678,7 +961,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Monitored, secured AWS deployment.
 
-### Week 25 — Documentation + README
+### Week 29 — Documentation + README
 
 **Implementation:**
 - Update root `README.md`:
@@ -695,7 +978,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Professional documentation. Someone new can clone the repo and understand the project in 10 minutes.
 
-### Week 26 — Interview Preparation
+### Week 30 — Interview Preparation
 
 **No new code.** This week is about preparing to talk about what you built.
 
@@ -737,8 +1020,9 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 | End of Month 2 | ✅ End-to-end order flow | Core business logic works, services talk to each other |
 | End of Month 3 | Kafka saga working | Async distributed transaction — the hardest pattern |
 | End of Month 4 | Tested + hardened | Production-quality code, not just "it works on my machine" |
-| End of Month 5 | AI search working | Differentiating feature that shows breadth |
-| End of Month 6 | Deployed + interview-ready | Live system you can demo, stories you can tell |
+| **End of Week 20** | **React frontend live** | **System is demoable in a browser — no curl required** |
+| End of Month 6 | AI search working | Differentiating feature that shows breadth |
+| End of Month 7 | Deployed + interview-ready | Live system you can demo, stories you can tell |
 
 ---
 
