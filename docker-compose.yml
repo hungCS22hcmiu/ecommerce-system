@@ -173,6 +173,8 @@ services:
       KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-payment-service}
       JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH:-./keys/public.pem}
       ENV: ${ENV:-development}
+    volumes:
+      - ./user-service/keys:/app/keys:ro
     depends_on:
       postgres:
         condition: service_healthy
