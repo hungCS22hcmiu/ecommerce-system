@@ -12,7 +12,7 @@ Distributed e-commerce platform — 5 microservices. Go for I/O-heavy concurrent
 | product-service | Java/Spring Boot | 8081 | **In Progress** | Optimistic lock + Redis cache-aside |
 | cart-service | Go (Gin + GORM) | 8002 | Scaffolded | Redis-first, WATCH/MULTI/EXEC |
 | order-service | Java/Spring Boot | 8082 | Scaffolded | Pessimistic lock on state transitions |
-| payment-service | Go (Gin) | 8003 | Scaffolded | Idempotency key + DB UNIQUE |
+| payment-service | Go (Gin) | 8003 | **Implemented** | Idempotency key + DB UNIQUE + Kafka saga |
 
 "Scaffolded" = `cmd/server/main.go` + `config/config.go` + health probe only.
 
@@ -139,3 +139,49 @@ docker exec ecommerce-postgres psql -U postgres -d ecommerce_users \
   -c "DROP TABLE IF EXISTS user_addresses, user_profiles, users CASCADE;"
 docker compose restart user-service
 ```
+
+## payment-service (Implemented)
+
+**Endpoints:**
+```
+POST /api/v1/payments                   # manual payment (direct trigger)
+GET  /api/v1/payments                   # list payments for authenticated user
+GET  /api/v1/payments/:id               # get payment by ID
+GET  /api/v1/payments/order/:orderId    # get payment by order ID
+GET  /health/live
+GET  /health/ready                      # checks postgres + kafka
+```
+
+**Auth:** RS256 JWT (`Authorization: Bearer <token>`). Public key loaded from `JWT_PUBLIC_KEY_PATH`.
+
+**Kafka saga (choreography):**
+- Consumes: `orders.created` (group `payment-service`, manual commit, `StartOffset=earliest`)
+- Publishes: `payments.completed` → `payments.failed` on terminal outcome
+- Worker pool: 5 goroutines (`KAFKA_WORKER_COUNT`), buffered channel size 100
+- `__TypeId__` header set on outbound messages so Spring Kafka `JsonDeserializer` resolves the correct class without requiring config changes on order-service
+
+**Key packages:**
+- `internal/kafka/event/events.go` — `OrderCreatedEvent`, `PaymentCompletedEvent`, `PaymentFailedEvent`
+- `internal/kafka/producer.go` — one `*kafka.Writer` per topic (sync, `RequireAll`)
+- `internal/kafka/consumer.go` — fetch loop + worker pool, graceful drain on shutdown
+- `internal/service/payment_service.go` — `ProcessPayment` with idempotency key dedup
+- `internal/gateway/mock_gateway.go` — mock payment gateway (90% success rate)
+- `internal/model/payment.go` — `Payment` + `PaymentHistory` (manual `TableName()` override)
+
+**Resilience (Week 11):**
+- Retry: transient errors retried 3× with 100ms / 200ms / 400ms backoffs; DLQ after exhaustion
+- DLQ (`payments.dlq`): poison pills (deserialize failure) + retry-exhausted messages; enriched with original bytes (base64), stage, attempts, correlationId
+- Permanent decline (`ErrGatewayDeclined`): service returns FAILED payment + nil error → consumer publishes `payments.failed` — no DLQ, no retry
+- Lag logger: `runLagLogger` goroutine fires every 30s; `slog.Warn` if lag > 10,000 messages
+- Graceful shutdown: 30-second deadline covers consumer drain; force-closes if exceeded
+
+**Tests:**
+- `internal/service/payment_service_test.go` — 6 unit tests (mock repo + gateway)
+- `internal/integration/payment_idempotency_test.go` — concurrent idempotency proof (10 goroutines, 1 winner)
+- `internal/integration/payment_kafka_test.go` — 4 Kafka resilience tests (testcontainers): poison DLQ, retry exhaustion DLQ, permanent decline no-DLQ, duplicate delivery idempotency
+
+**Scripts:**
+- `bash script/e2e-payment.sh` — full saga: login → create order → poll payment → verify CONFIRMED order → health check (12 assertions)
+- `bash script/loadtest-orders.sh` — 100 orders at 10 concurrent, asserts 0 PENDING + 0 DLQ
+
+**Docs:** `docs/adrs/saga-resilience.md` · `payment-service/README.md`

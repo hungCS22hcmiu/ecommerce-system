@@ -289,7 +289,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Dead letter queue for failed payments
 - Full async order completion flow
 
-### Week 9 — Kafka Fundamentals + Payment Service Core
+### Week 9 — Kafka Fundamentals + Payment Service Core ✅ DONE
 
 **Learning Topics:**
 - Kafka architecture: brokers, topics, partitions, consumer groups, offsets
@@ -320,7 +320,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Payment service core working with idempotency.
 
-### Week 10 — Kafka Producer + Consumer Wiring
+### Week 10 — Kafka Producer + Consumer Wiring ✅ DONE
 
 **Learning Topics:**
 - Go Kafka libraries: `confluent-kafka-go` or `segmentio/kafka-go` (pick one, understand trade-offs)
@@ -349,7 +349,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Full saga flow working through Kafka.
 
-### Week 11 — Error Handling, DLQ, and Resilience
+### Week 11 — Error Handling, DLQ, and Resilience ✅ DONE
 
 **Learning Topics:**
 - Dead Letter Queue (DLQ): what happens when a message can't be processed after N retries
@@ -358,19 +358,22 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Consumer lag monitoring: how to know if your consumer is falling behind
 
 **Implementation:**
-- Add retry logic: payment consumer retries 3 times before sending to DLQ
-- Create DLQ topic: `payments.dlq` — failed messages land here for manual inspection
-- Add poison pill handling: if message can't be deserialized, send to DLQ immediately (don't crash)
-- Add consumer lag logging: log offset vs high watermark on each poll
-- Add graceful shutdown for Kafka consumers (commit final offsets before stopping)
+- Error classification: three tiers — poison (deserialize failure → DLQ immediately), transient (retry 3× at 100/200/400ms backoffs → DLQ after exhaustion), permanent decline (`ErrGatewayDeclined` → `payments.failed`, no DLQ)
+- `sendToDLQ` helper: enriches failed messages with original bytes (base64), errorStage, attempts, correlationId before routing to `payments.dlq`
+- Consumer lag logger: `runLagLogger` goroutine fires every 30s, logs `lag/offset/highWaterMark`, emits `slog.Warn` if lag > 10,000
+- Graceful shutdown hardening: 30-second deadline covers consumer drain; if exceeded, logs "shutdown deadline exceeded" and force-closes
+- Kafka integration tests: 4 tests using `testcontainers-go/modules/kafka` — poison pill DLQ, retry exhaustion DLQ, permanent decline (no DLQ), duplicate delivery idempotency
+- Load test script: `script/loadtest-orders.sh` — 100 orders at 10 concurrent, waits 30s, asserts 0 PENDING + 0 DLQ
+- ADR: `docs/adrs/saga-resilience.md` — explains triage decisions, at-least-once trade-off, DLQ inspection
+- Service README: `payment-service/README.md`
 
 **Review/Test:**
-- Test DLQ: send a malformed message, verify it ends up in DLQ, consumer continues
-- Test retry exhaustion: make payment always fail, verify message goes to DLQ after 3 attempts
-- Test ordering: verify that two orders from the same user are processed in order (partition key = userId)
-- **Load test:** Use a script to create 100 orders rapidly, verify all get processed correctly
+- Poison pill smoke test: `THIS_IS_NOT_JSON{{{` → `payments.dlq` with `errorStage="deserialize"` ✅
+- Retry exhaustion: stub service always fails → DLQ with `errorStage="process"` ✅
+- E2E regression: `bash script/e2e-payment.sh` → 12/12 passing ✅
+- Unit tests: `go test -race ./internal/service/` → 6/6 passing ✅
 
-**Deliverable:** Resilient Kafka saga with DLQ and proper error handling.
+**Deliverable:** Resilient Kafka saga with DLQ, retry, lag monitoring, and graceful shutdown proven by tests.
 
 ### Week 12 — Full System Integration + Nginx
 

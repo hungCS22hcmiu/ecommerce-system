@@ -325,6 +325,81 @@ components:
           type: boolean
           default: false
 
+    # ── Payment schemas ────────────────────────────
+    PaymentStatus:
+      type: string
+      enum: [PENDING, COMPLETED, FAILED, REFUNDED]
+      example: COMPLETED
+
+    PaymentMethod:
+      type: string
+      enum: [MOCK_CARD, MOCK_WALLET]
+      example: MOCK_CARD
+
+    PaymentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 7a8b9c0d-e1f2-3456-a7b8-c9d0e1f23456
+        orderId:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        userId:
+          type: string
+          format: uuid
+          example: 00000000-0000-0000-0000-000000000002
+        amount:
+          type: number
+          format: decimal
+          example: 574.00
+        currency:
+          type: string
+          example: USD
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        gatewayReference:
+          type: string
+          description: Transaction ID from the payment gateway (present on COMPLETED only)
+          example: MOCK-a3f9b2e1-d8c7-4a5b-9e0f-1d2c3b4a5e6f
+        createdAt:
+          type: string
+          format: date-time
+
+    ProcessPaymentRequest:
+      type: object
+      required: [orderId, userId, amount, currency, idempotencyKey]
+      description: |
+        **Internal endpoint.** Normally payments are created automatically via the
+        Kafka choreography saga (`orders.created` → payment-service). This request
+        body is for direct invocation only (smoke tests, manual replay).
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        userId:
+          type: string
+          format: uuid
+          example: 00000000-0000-0000-0000-000000000002
+        amount:
+          type: number
+          format: decimal
+          example: 574.00
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          example: USD
+        idempotencyKey:
+          type: string
+          description: Must equal `orderId.toString()` when used in the saga path
+          example: 550e8400-e29b-41d4-a716-446655440000
+
   # ─── Reusable Responses ───────────────────────
   responses:
     Unauthorized:
@@ -389,6 +464,12 @@ tags:
     description: Registration, login, token management
   - name: Users
     description: User profile and address management
+  - name: Payments
+    description: |
+      Payment processing via Kafka choreography saga.
+      Payments are normally created automatically when an order is placed
+      (`orders.created` → payment-service → `payments.completed/failed`).
+      The `POST /payments` endpoint allows direct invocation for smoke tests and manual replay.
 
 paths:
 
@@ -852,6 +933,179 @@ paths:
                         $ref: '#/components/schemas/UserProfile'
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  # ════════════════════════════════════════════
+  # PAYMENT ENDPOINTS  (payment-service :8003)
+  # ════════════════════════════════════════════
+
+  /payments:
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      summary: "[Internal] Process a payment directly"
+      description: |
+        **Internal endpoint — not exposed through Nginx to external clients.**
+        In normal operation, payments are created automatically by the Kafka saga
+        (`orders.created` event → payment-service consumer). Use this endpoint
+        for smoke tests and manual saga replay only.
+
+        Idempotent: submitting the same `idempotencyKey` twice returns the
+        existing payment without re-charging the gateway.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessPaymentRequest'
+      responses:
+        "201":
+          description: Payment processed (success or gateway decline — both return 201)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaymentResponse'
+        "400":
+          $ref: '#/components/responses/ValidationError'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+    get:
+      tags: [Payments]
+      operationId: listPayments
+      summary: List payments for the authenticated user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: 1-based page number
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page
+      responses:
+        "200":
+          description: Paginated payment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PaymentResponse'
+                      meta:
+                        $ref: '#/components/schemas/PaginationMeta'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /payments/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: Payment UUID
+
+    get:
+      tags: [Payments]
+      operationId: getPaymentById
+      summary: Get a payment by ID
+      description: |
+        Returns the payment if the authenticated user owns it.
+        Admins can retrieve any payment.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Payment found
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaymentResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Payment belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "500":
+          $ref: '#/components/responses/InternalError'
+
+  /payments/order/{orderId}:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: Order UUID whose payment to retrieve
+
+    get:
+      tags: [Payments]
+      operationId: getPaymentByOrderId
+      summary: Get a payment by order ID
+      description: |
+        Looks up the payment associated with the given order.
+        The authenticated user must own the order (or be an admin).
+        This is the primary polling endpoint for the saga: after creating an
+        order, clients poll here until status is `COMPLETED` or `FAILED`.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Payment found
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaymentResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Order belongs to a different user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           $ref: '#/components/responses/NotFound'
         "500":

@@ -22,13 +22,9 @@ import java.util.Map;
 @EnableCaching
 public class RedisConfig {
 
-    /**
-     * Jackson ObjectMapper configured for Redis serialization:
-     * - JavaTimeModule: handles OffsetDateTime, LocalDate, etc.
-     * - DefaultTyping: embeds class name in JSON so deserialization works without knowing the type upfront.
-     */
-    @Bean
-    public ObjectMapper redisObjectMapper() {
+    // Not a @Bean — keeps this mapper out of the Spring MVC context so REST responses
+    // don't inherit DefaultTyping (which causes @class to appear in HTTP responses).
+    private ObjectMapper buildRedisObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -67,8 +63,8 @@ public class RedisConfig {
      * Default TTL (10 min) applies to any cache not listed above.
      */
     @Bean
-    public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory,
-                                          ObjectMapper redisObjectMapper) {
+    public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
+        ObjectMapper redisObjectMapper = buildRedisObjectMapper();
         RedisCacheConfiguration defaultConfig = baseCacheConfig(redisObjectMapper)
                 .entryTtl(Duration.ofMinutes(10));
 
