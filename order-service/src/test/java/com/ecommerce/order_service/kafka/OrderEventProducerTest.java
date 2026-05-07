@@ -1,6 +1,7 @@
 package com.ecommerce.order_service.kafka;
 
 import com.ecommerce.order_service.kafka.event.OrderCreatedEvent;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -23,6 +24,7 @@ class OrderEventProducerTest {
     @InjectMocks private OrderEventProducer producer;
 
     @Test
+    @SuppressWarnings("unchecked")
     void publishOrderCreated_sendsToCorrectTopicWithOrderIdAsKey() {
         UUID orderId = UUID.randomUUID();
         OrderCreatedEvent event = OrderCreatedEvent.builder()
@@ -34,17 +36,14 @@ class OrderEventProducerTest {
 
         producer.publishOrderCreated(event);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<String> topicCaptor = ArgumentCaptor.forClass(String.class);
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<String> keyCaptor   = ArgumentCaptor.forClass(String.class);
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Object> valueCaptor = ArgumentCaptor.forClass(Object.class);
+        ArgumentCaptor<ProducerRecord<String, Object>> recordCaptor =
+                ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaTemplate).send(recordCaptor.capture());
 
-        verify(kafkaTemplate).send(topicCaptor.capture(), keyCaptor.capture(), valueCaptor.capture());
-
-        assertThat(topicCaptor.getValue()).isEqualTo("orders.created");
-        assertThat(keyCaptor.getValue()).isEqualTo(orderId.toString());
-        assertThat(valueCaptor.getValue()).isEqualTo(event);
+        ProducerRecord<String, Object> record = recordCaptor.getValue();
+        assertThat(record.topic()).isEqualTo("orders.created");
+        assertThat(record.key()).isEqualTo(orderId.toString());
+        assertThat(record.value()).isEqualTo(event);
+        assertThat(record.headers().lastHeader("X-Correlation-ID")).isNotNull();
     }
 }

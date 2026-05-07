@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/middleware"
 )
 
 var (
@@ -65,6 +67,9 @@ func (c *productClient) GetProduct(ctx context.Context, productID int64) (*Produ
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err
+		}
+		if id, ok := ctx.Value(middleware.CorrelationKey).(string); ok && id != "" {
+			req.Header.Set("X-Correlation-ID", id)
 		}
 
 		resp, err := c.httpClient.Do(req)

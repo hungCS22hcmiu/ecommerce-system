@@ -46,6 +46,9 @@ server:
   port: 8081
 
 logging:
+  structured:
+    format:
+      console: ecs
   level:
     # TRACE shows cache hits ("Cache entry found") and misses ("No cache entry")
     org.springframework.cache: TRACE

@@ -73,6 +73,7 @@ func main() {
 		Addr:     cfg.RedisAddr(),
 		Password: cfg.RedisPassword,
 		DB:       0,
+		PoolSize: 20,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

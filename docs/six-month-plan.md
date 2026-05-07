@@ -398,7 +398,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 ---
 
-## Phase 4: Testing, Observability, and Hardening (Month 4 — Weeks 13–16)
+## Phase 4: Testing, Observability, and Hardening (Month 4 — Weeks 13–16) ✅ DONE
 
 ### Month 4 Goals
 - Comprehensive test coverage across all services
@@ -463,7 +463,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Load test results with bottleneck analysis. Performance tuning applied.
 
-### Week 16 — Security Hardening
+### Week 16 — Security Hardening ✅ DONE
 
 **Learning Topics:**
 - OWASP Top 10 for APIs: injection, broken auth, mass assignment, SSRF
@@ -472,18 +472,20 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 - Rate limiting beyond Nginx: per-user rate limits in application layer
 
 **Implementation:**
-- Security audit checklist across all services:
-  - [ ] All user input validated (DTOs with validation tags)
-  - [ ] No SQL string concatenation (parameterized queries only)
-  - [ ] JWT validation on all protected routes
-  - [ ] Ownership checks on all user-scoped resources (order belongs to user, etc.)
-  - [ ] Rate limiting on auth endpoints (login, register)
-  - [ ] No secrets in code or Docker images
-  - [ ] CORS properly configured (not `*` in production)
-- Fix any issues found
-- Add Helmet-style headers in Nginx (X-Content-Type-Options, X-Frame-Options, etc.)
+- Security audit across all 5 services — findings:
+  - ✅ All user input validated (DTOs with validation tags in all services)
+  - ✅ No SQL string concatenation (GORM + JPA parameterized queries only)
+  - ✅ JWT middleware on all Go protected routes; Java services trust gateway header (deferred)
+  - ✅ Ownership checks on orders, addresses, payments
+  - ✅ Rate limiting on auth endpoints — added dedicated `auth_limit` zone (5 req/min) in Nginx
+  - ✅ No secrets in code or Docker images (`.env` gitignored)
+  - ✅ CORS tightened: `*` → `http://localhost:3000`
+- Added `Referrer-Policy: no-referrer` and `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` headers to Nginx
+- Blocked `PUT /orders/:id/ship` and `/deliver` from external access (403) — seller-only, internal Docker network
+- Blocked `POST /inventory/:id/reserve` and `/release` from external access (403) — service-to-service only
+- Created `docs/security-checklist.md` — OWASP API Top 10 assessment, per-service status table, deferred items
 
-**Milestone:** System is tested, observable, performant, and hardened. Production-ready (minus deployment).
+**Milestone:** ✅ System is tested, observable, performant, and hardened. Production-ready (minus deployment).
 
 ---
 
@@ -1015,7 +1017,7 @@ Manual `useEffect` for data fetching requires you to handle: loading state, erro
 | End of Month 1 | ✅ Product Service complete | Second service done, you know both Go and Spring Boot |
 | End of Month 2 | ✅ End-to-end order flow | Core business logic works, services talk to each other |
 | End of Month 3 | ✅ Kafka saga + Nginx gateway | Async distributed transaction + single entry point for frontend |
-| End of Month 4 | Tested + hardened | Production-quality code, not just "it works on my machine" |
+| End of Month 4 | ✅ Tested + hardened | Production-quality code, not just "it works on my machine" |
 | **End of Week 20** | **React frontend live** | **System is demoable in a browser — no curl required** |
 | End of Month 6 | AI search working | Differentiating feature that shows breadth |
 | End of Month 7 | Deployed + interview-ready | Live system you can demo, stories you can tell |

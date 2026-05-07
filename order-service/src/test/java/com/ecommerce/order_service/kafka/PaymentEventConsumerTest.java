@@ -6,6 +6,7 @@ import com.ecommerce.order_service.kafka.event.PaymentCompletedEvent;
 import com.ecommerce.order_service.kafka.event.PaymentFailedEvent;
 import com.ecommerce.order_service.model.OrderStatus;
 import com.ecommerce.order_service.service.OrderService;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,8 +38,10 @@ class PaymentEventConsumerTest {
         @Test
         void validEvent_updatesOrderToConfirmed() {
             PaymentCompletedEvent event = new PaymentCompletedEvent(orderId, paymentId, BigDecimal.TEN);
+            ConsumerRecord<String, PaymentCompletedEvent> record =
+                    new ConsumerRecord<>("payments.completed", 0, 0L, orderId.toString(), event);
 
-            consumer.onPaymentCompleted(event);
+            consumer.onPaymentCompleted(record);
 
             verify(orderService).updateOrderStatus(
                     eq(orderId),
@@ -51,20 +54,24 @@ class PaymentEventConsumerTest {
         @Test
         void orderNotFound_exceptionSwallowed_listenerDoesNotRethrow() {
             PaymentCompletedEvent event = new PaymentCompletedEvent(orderId, paymentId, BigDecimal.TEN);
+            ConsumerRecord<String, PaymentCompletedEvent> record =
+                    new ConsumerRecord<>("payments.completed", 0, 0L, orderId.toString(), event);
             doThrow(new OrderNotFoundException(orderId))
                     .when(orderService).updateOrderStatus(any(), any(), any(), any());
 
             // Must not propagate — swallowed to avoid Kafka retry storm
-            assertThatNoException().isThrownBy(() -> consumer.onPaymentCompleted(event));
+            assertThatNoException().isThrownBy(() -> consumer.onPaymentCompleted(record));
         }
 
         @Test
         void invalidStateTransition_exceptionSwallowed() {
             PaymentCompletedEvent event = new PaymentCompletedEvent(orderId, paymentId, BigDecimal.TEN);
+            ConsumerRecord<String, PaymentCompletedEvent> record =
+                    new ConsumerRecord<>("payments.completed", 0, 0L, orderId.toString(), event);
             doThrow(new InvalidOrderStateException("Already cancelled"))
                     .when(orderService).updateOrderStatus(any(), any(), any(), any());
 
-            assertThatNoException().isThrownBy(() -> consumer.onPaymentCompleted(event));
+            assertThatNoException().isThrownBy(() -> consumer.onPaymentCompleted(record));
         }
     }
 
@@ -76,8 +83,10 @@ class PaymentEventConsumerTest {
         @Test
         void validEvent_updatesOrderToCancelled() {
             PaymentFailedEvent event = new PaymentFailedEvent(orderId, "Insufficient funds");
+            ConsumerRecord<String, PaymentFailedEvent> record =
+                    new ConsumerRecord<>("payments.failed", 0, 0L, orderId.toString(), event);
 
-            consumer.onPaymentFailed(event);
+            consumer.onPaymentFailed(record);
 
             verify(orderService).updateOrderStatus(
                     eq(orderId),
@@ -90,19 +99,23 @@ class PaymentEventConsumerTest {
         @Test
         void orderNotFound_exceptionSwallowed() {
             PaymentFailedEvent event = new PaymentFailedEvent(orderId, "Card declined");
+            ConsumerRecord<String, PaymentFailedEvent> record =
+                    new ConsumerRecord<>("payments.failed", 0, 0L, orderId.toString(), event);
             doThrow(new OrderNotFoundException(orderId))
                     .when(orderService).updateOrderStatus(any(), any(), any(), any());
 
-            assertThatNoException().isThrownBy(() -> consumer.onPaymentFailed(event));
+            assertThatNoException().isThrownBy(() -> consumer.onPaymentFailed(record));
         }
 
         @Test
         void invalidStateTransition_exceptionSwallowed() {
             PaymentFailedEvent event = new PaymentFailedEvent(orderId, "Timeout");
+            ConsumerRecord<String, PaymentFailedEvent> record =
+                    new ConsumerRecord<>("payments.failed", 0, 0L, orderId.toString(), event);
             doThrow(new InvalidOrderStateException("Already delivered"))
                     .when(orderService).updateOrderStatus(any(), any(), any(), any());
 
-            assertThatNoException().isThrownBy(() -> consumer.onPaymentFailed(event));
+            assertThatNoException().isThrownBy(() -> consumer.onPaymentFailed(record));
         }
     }
 }

@@ -153,6 +153,7 @@ func main() {
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	go func() {
 		slog.Info("payment-service starting", "port", cfg.Port)
