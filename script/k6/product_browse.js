@@ -14,7 +14,7 @@ export const options = {
   ],
   thresholds: {
     http_req_duration: ['p(95)<500'],  // 95th percentile under 500ms
-    http_req_failed:   ['rate<0.01'],  // error rate under 1%
+    http_req_failed:   ['rate<0.05'],  // <5%: accounts for expected 404s on sparse seed data
   },
 };
 

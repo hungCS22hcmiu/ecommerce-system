@@ -9,7 +9,8 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 
-const BASE = __ENV.BASE_URL || 'http://localhost';
+const BASE     = __ENV.BASE_URL  || 'http://localhost';
+const AUTH_URL = __ENV.AUTH_URL  || BASE;  // user-service; override when bypassing Nginx
 
 export const options = {
   stages: [
@@ -25,7 +26,7 @@ export const options = {
 
 export function setup() {
   const res = http.post(
-    `${BASE}/api/v1/auth/login`,
+    `${AUTH_URL}/api/v1/auth/login`,
     JSON.stringify({ email: 'customer@example.com', password: 'Customer@123' }),
     { headers: { 'Content-Type': 'application/json' } },
   );
@@ -39,10 +40,11 @@ export function setup() {
   return { token, userId };
 }
 
-export default function ({ token }) {
+export default function ({ token, userId }) {
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
+    'X-User-Id': userId,  // order-service reads userId from this header (set by gateway in prod)
   };
 
   // Each VU creates a fresh order with a unique cartId (no shared cart state)

@@ -3,12 +3,13 @@
 // Requires: stack running with seeded users (script/sample_users.sql)
 //
 // Expected behaviour: 409 responses are normal under concurrent load — the
-// cart uses Redis WATCH/MULTI/EXEC (optimistic locking). The failure threshold
-// only counts 5xx errors, not 4xx conflicts.
+// cart uses Redis WATCH/MULTI/EXEC (optimistic locking). They are marked as
+// expected statuses so they don't inflate http_req_failed.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const BASE = __ENV.BASE_URL || 'http://localhost';
+const BASE     = __ENV.BASE_URL  || 'http://localhost';
+const AUTH_URL = __ENV.AUTH_URL  || BASE;  // user-service; override when bypassing Nginx
 
 export const options = {
   stages: [
@@ -18,14 +19,13 @@ export const options = {
   ],
   thresholds: {
     http_req_duration: ['p(95)<1000'],
-    // 409 (Redis WATCH conflict) is expected; only 5xx counts as a failure
-    'http_req_failed{expected_response:false}': ['rate<0.05'],
+    http_req_failed:   ['rate<0.05'],  // 409 marked expected below; only real errors counted
   },
 };
 
 export function setup() {
   const res = http.post(
-    `${BASE}/api/v1/auth/login`,
+    `${AUTH_URL}/api/v1/auth/login`,
     JSON.stringify({ email: 'customer@example.com', password: 'Customer@123' }),
     { headers: { 'Content-Type': 'application/json' } },
   );
@@ -43,11 +43,11 @@ export default function ({ token }) {
     'Authorization': `Bearer ${token}`,
   };
 
-  // Add item to cart
+  // Add item to cart — 409 marked as expected so it doesn't inflate http_req_failed
   const addRes = http.post(
     `${BASE}/api/v1/cart/items`,
     JSON.stringify({ product_id: 1, quantity: 1 }),
-    { headers },
+    { headers, responseCallback: http.expectedStatuses(200, 201, 409) },
   );
   // 200/201 = success, 409 = Redis WATCH conflict (concurrent update, expected)
   check(addRes, { 'add item ok': (r) => r.status === 200 || r.status === 201 || r.status === 409 });
