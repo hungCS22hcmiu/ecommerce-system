@@ -50,3 +50,8 @@ server:
 
 product-service:
   url: ${PRODUCT_SERVICE_URL:http://product-service:8081}
+
+logging:
+  structured:
+    format:
+      console: ecs

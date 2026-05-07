@@ -105,6 +105,7 @@ func main() {
 	}
 	router := gin.New()
 	router.Use(middleware.Recovery())
+	router.Use(middleware.Correlation())
 	router.Use(middleware.Logger())
 
 	// Health probes
