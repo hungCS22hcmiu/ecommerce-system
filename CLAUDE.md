@@ -79,7 +79,8 @@ Java 21, Spring Boot 3.5, Lombok. Flyway enabled (`ddl-auto: none`, migrations i
 
 ## Key Files
 - `docker-compose.yml` — full stack with health checks (includes Nginx on port 80)
-- `nginx/nginx.conf` — reverse proxy: routes, rate limiting (10 req/s burst=5), CORS, security headers
+- `nginx/nginx.conf` — reverse proxy: routes, rate limiting (10r/s general + 5r/min auth), CORS (localhost:3000), security headers (CSP, Referrer-Policy), blocked internal routes
+- `docs/security-checklist.md` — OWASP API Top 10 audit results, per-service status, deferred items
 - `script/init-databases.sql` — all 5 DB schemas (307 lines)
 - `script/sample_users.sql` — 1 admin / 1 customer / 1 seller (pre-verified)
 - `api/openapi.yaml` — full REST API contract
@@ -102,7 +103,15 @@ All external traffic enters through port 80. Services are NOT directly exposed i
 /health/*           → payment-service:8003  (postgres + kafka health check)
 ```
 
-**Rate limiting:** `limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s`, `burst=5 nodelay` on all `/api/v1/` locations.
+**Rate limiting:** General API: `zone=api_limit rate=10r/s burst=5 nodelay`. Auth endpoints additionally use `zone=auth_limit rate=5r/m burst=3 nodelay` (brute-force protection).
+
+**Blocked routes (internal-only, 403 for external clients):**
+- `PUT /api/v1/orders/:id/ship` and `/deliver` — seller-only; must call order-service:8082 directly
+- `POST /api/v1/inventory/:id/reserve` and `/release` — service-to-service; order-service → product-service:8081
+
+**Security headers:** `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`
+
+**CORS:** `Access-Control-Allow-Origin: http://localhost:3000` (React frontend dev server)
 
 **Scripts (all default to Nginx port 80):**
 - `bash script/e2e-test.sh` — Browse → Cart → Order (14 assertions); override: `USER_SVC=http://localhost:8001`
