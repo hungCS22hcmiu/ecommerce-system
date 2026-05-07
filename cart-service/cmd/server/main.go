@@ -67,6 +67,7 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr(),
 		Password: cfg.RedisPassword,
+		PoolSize: 20,
 	})
 	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pingCancel()
@@ -158,6 +159,7 @@ func main() {
 		Handler:      router,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	go func() {
 		slog.Info("cart-service starting", "port", cfg.Port)
