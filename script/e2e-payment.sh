@@ -5,16 +5,16 @@
 # Usage:
 #   bash script/e2e-payment.sh
 #
-# Override service URLs or product:
+# Defaults to Nginx on port 80. Override to bypass Nginx:
 #   ORDER_SVC=http://localhost:8082 PAYMENT_SVC=http://localhost:8003 bash script/e2e-payment.sh
 #   PRODUCT_ID=3 bash script/e2e-payment.sh
 
 set -euo pipefail
 
-USER_SVC="${USER_SVC:-http://localhost:8001}"
-PRODUCT_SVC="${PRODUCT_SVC:-http://localhost:8081}"
-PAYMENT_SVC="${PAYMENT_SVC:-http://localhost:8003}"
-ORDER_SVC="${ORDER_SVC:-http://localhost:8082}"
+USER_SVC="${USER_SVC:-http://localhost}"
+PRODUCT_SVC="${PRODUCT_SVC:-http://localhost}"
+PAYMENT_SVC="${PAYMENT_SVC:-http://localhost}"
+ORDER_SVC="${ORDER_SVC:-http://localhost}"
 SAGA_WAIT_SECONDS="${SAGA_WAIT_SECONDS:-20}"
 
 GREEN='\033[0;32m'

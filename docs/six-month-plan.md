@@ -281,7 +281,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 ---
 
-## Phase 3: Payment Service + Kafka Saga (Month 3 — Weeks 9–12)
+## Phase 3: Payment Service + Kafka Saga (Month 3 — Weeks 9–12) ✅ DONE
 
 ### Month 3 Goals
 - Payment service with idempotency pattern
@@ -375,30 +375,26 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 **Deliverable:** Resilient Kafka saga with DLQ, retry, lag monitoring, and graceful shutdown proven by tests.
 
-### Week 12 — Full System Integration + Nginx
+### Week 12 — Full System Integration + Nginx ✅ DONE
 
 **Implementation:**
-- Add Nginx reverse proxy configuration:
-  - `/api/v1/auth/*` → user-service:8001
-  - `/api/v1/users/*` → user-service:8001
-  - `/api/v1/products/*` → product-service:8081
-  - `/api/v1/cart/*` → cart-service:8002
-  - `/api/v1/orders/*` → order-service:8082
-  - `/api/v1/payments/*` → payment-service:8003
-- Add rate limiting in Nginx (10 req/s per IP)
-- Add CORS headers configuration
-- Add Nginx to Docker Compose
-- Update the e2e test script to go through Nginx (port 80)
-- Run the complete flow through Nginx:
-  1. Register → Login → Browse → Add to Cart → Create Order → Payment auto-processes → Order confirmed
+- `nginx/nginx.conf` — full reverse proxy: 7 location blocks + upstream blocks per service, `rate=10r/s burst=5 nodelay` (rate limiting), CORS headers (`*`, tighten in Week 16), security headers (`X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`), OPTIONS preflight, `/health/` routed to payment-service (postgres+kafka check)
+- `docker-compose.yml` — added `nginx:alpine` service on port 80, `restart: unless-stopped`
+- `script/e2e-test.sh` — default URLs changed to `http://localhost` (port 80 via Nginx); backward-compatible via env var override
+- `script/e2e-payment.sh` — same URL change; health check routes through Nginx to payment-service
+- `script/perf-baseline.sh` — new script: measures min/p50/avg/max for product list, single product, search, login, order creation
+- **Bug fix (product-service):** `RedisConfig.java` — Jackson 2.19 couldn't deserialize `PageImpl` or `Collections$UnmodifiableRandomAccessList` from Redis; fixed with custom `PageImplDeserializer` that reconstructs `PageImpl(content, PageRequest, totalElements)` preserving full pagination metadata
 
 **Review/Test:**
-- Verify all routes work through Nginx
-- Test rate limiting: send 20 rapid requests, verify throttling kicks in
-- Run the complete e2e test
-- **Performance baseline:** Measure response times for key operations (product list, order creation)
+- All 5 service routes verified through Nginx (correct HTTP status codes) ✅
+- CORS + security headers present on all responses ✅
+- Rate limiting confirmed: 20 rapid requests → first 6 allowed, rest return 429 ✅
+- `bash script/e2e-test.sh` → **14/14 assertions passed** ✅
+- `bash script/e2e-payment.sh` → **12/12 assertions passed** (FAILED payment → CANCELLED order path) ✅
+- Health check `GET /health/ready` via Nginx → postgres=UP, kafka=UP ✅
+- Performance baseline: product list p50=5ms, order creation p50=11ms ✅
 
-**Milestone:** Complete system working end-to-end through Nginx. All 5 services operational. Kafka saga proven.
+**Milestone:** ✅ Complete system working end-to-end through Nginx. All 5 services behind port 80. Kafka saga proven. Single base URL (`http://localhost/api/v1`) ready for React frontend (Phase 5).
 
 ---
 
@@ -1018,7 +1014,7 @@ Manual `useEffect` for data fetching requires you to handle: loading state, erro
 |------|-----------|----------------|
 | End of Month 1 | ✅ Product Service complete | Second service done, you know both Go and Spring Boot |
 | End of Month 2 | ✅ End-to-end order flow | Core business logic works, services talk to each other |
-| End of Month 3 | Kafka saga working | Async distributed transaction — the hardest pattern |
+| End of Month 3 | ✅ Kafka saga + Nginx gateway | Async distributed transaction + single entry point for frontend |
 | End of Month 4 | Tested + hardened | Production-quality code, not just "it works on my machine" |
 | **End of Week 20** | **React frontend live** | **System is demoable in a browser — no curl required** |
 | End of Month 6 | AI search working | Differentiating feature that shows breadth |

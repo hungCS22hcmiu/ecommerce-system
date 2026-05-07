@@ -1,13 +1,20 @@
 package com.ecommerce.product_service.config;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -15,7 +22,10 @@ import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSeriali
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
+import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @Configuration
@@ -33,7 +43,52 @@ public class RedisConfig {
                 ObjectMapper.DefaultTyping.NON_FINAL,
                 JsonTypeInfo.As.PROPERTY
         );
+        // Jackson 2.19 can't instantiate PageImpl (no no-arg constructor) or
+        // Collections$UnmodifiableRandomAccessList (private inner class). Register
+        // a custom deserializer that reads the cached JSON and reconstructs PageImpl
+        // with full pagination metadata (total, page number, page size).
+        SimpleModule pageModule = new SimpleModule();
+        pageModule.addDeserializer(PageImpl.class, new PageImplDeserializer());
+        mapper.registerModule(pageModule);
         return mapper;
+    }
+
+    // Reads the type-wrapped array format produced by DefaultTyping.NON_FINAL:
+    //   content: ["java.util.Collections$UnmodifiableRandomAccessList", [{...}, ...]]
+    // Reconstructs PageImpl(content, PageRequest, totalElements) so pagination
+    // metadata (totalElements, page, size) is preserved across cache reads.
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static class PageImplDeserializer extends StdDeserializer<PageImpl<?>> {
+        PageImplDeserializer() { super(PageImpl.class); }
+
+        @Override
+        public PageImpl<?> deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            ObjectMapper mapper = (ObjectMapper) p.getCodec();
+            JsonNode root = mapper.readTree(p);
+
+            List<Object> content = new ArrayList<>();
+            JsonNode contentNode = root.get("content");
+            if (contentNode != null) {
+                // DefaultTyping wraps lists as ["TypeName", [...items...]].
+                // Detect this 2-element array pattern: first element is the type string.
+                JsonNode itemsArray = (contentNode.isArray()
+                        && contentNode.size() == 2
+                        && contentNode.get(0).isTextual())
+                        ? contentNode.get(1)
+                        : contentNode;
+                if (itemsArray != null && itemsArray.isArray()) {
+                    for (JsonNode element : itemsArray) {
+                        content.add(mapper.treeToValue(element, Object.class));
+                    }
+                }
+            }
+
+            int page  = root.path("number").asInt(0);
+            int size  = Math.max(root.path("size").asInt(20), 1);
+            long total = root.path("totalElements").asLong(content.size());
+
+            return new PageImpl<>(content, PageRequest.of(page, size), total);
+        }
     }
 
     /**

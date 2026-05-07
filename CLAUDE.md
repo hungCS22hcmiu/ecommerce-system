@@ -9,12 +9,11 @@ Distributed e-commerce platform — 5 microservices. Go for I/O-heavy concurrent
 | Service | Language | Port | Status | Key Pattern |
 |---|---|---|---|---|
 | user-service | Go (Gin + GORM) | 8001 | **Implemented** | Pessimistic lock on login |
-| product-service | Java/Spring Boot | 8081 | **In Progress** | Optimistic lock + Redis cache-aside |
-| cart-service | Go (Gin + GORM) | 8002 | Scaffolded | Redis-first, WATCH/MULTI/EXEC |
-| order-service | Java/Spring Boot | 8082 | Scaffolded | Pessimistic lock on state transitions |
+| product-service | Java/Spring Boot | 8081 | **Implemented** | Optimistic lock + Redis cache-aside |
+| cart-service | Go (Gin + GORM) | 8002 | **Implemented** | Redis-first, WATCH/MULTI/EXEC |
+| order-service | Java/Spring Boot | 8082 | **Implemented** | Pessimistic lock on state transitions |
 | payment-service | Go (Gin) | 8003 | **Implemented** | Idempotency key + DB UNIQUE + Kafka saga |
-
-"Scaffolded" = `cmd/server/main.go` + `config/config.go` + health probe only.
+| nginx | nginx:alpine | 80 | **Active** | Reverse proxy, rate limiting, CORS |
 
 ## Infrastructure Commands
 
@@ -24,6 +23,7 @@ docker compose up -d postgres redis          # core infra
 docker compose up -d zookeeper kafka         # only for payment/order Kafka flows
 docker compose up -d product-service         # single service
 docker compose build product-service         # rebuild after code changes
+docker compose up --build -d                 # full stack including Nginx on port 80
 ```
 
 Databases auto-initialized via `script/init-databases.sql` (5 logical DBs, full schemas).
@@ -78,14 +78,41 @@ Java 21, Spring Boot 3.5, Lombok. Flyway enabled (`ddl-auto: none`, migrations i
 **API envelope:** `{ success, data, meta? }` / `{ success: false, error }` — see `api/openapi.yaml`.
 
 ## Key Files
-- `docker-compose.yml` — full stack with health checks
+- `docker-compose.yml` — full stack with health checks (includes Nginx on port 80)
+- `nginx/nginx.conf` — reverse proxy: routes, rate limiting (10 req/s burst=5), CORS, security headers
 - `script/init-databases.sql` — all 5 DB schemas (307 lines)
 - `script/sample_users.sql` — 1 admin / 1 customer / 1 seller (pre-verified)
 - `api/openapi.yaml` — full REST API contract
 - `docs/adr/locking-strategy.md` — concurrency rationale per service
 - `.env.example` — all 43 env vars
 
-## product-service (In Progress)
+## Nginx (Active)
+
+All external traffic enters through port 80. Services are NOT directly exposed in production usage.
+
+**Route table:**
+```
+/api/v1/auth/*      → user-service:8001
+/api/v1/users/*     → user-service:8001
+/api/v1/products*   → product-service:8081
+/api/v1/inventory*  → product-service:8081
+/api/v1/cart*       → cart-service:8002
+/api/v1/orders*     → order-service:8082
+/api/v1/payments*   → payment-service:8003
+/health/*           → payment-service:8003  (postgres + kafka health check)
+```
+
+**Rate limiting:** `limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s`, `burst=5 nodelay` on all `/api/v1/` locations.
+
+**Scripts (all default to Nginx port 80):**
+- `bash script/e2e-test.sh` — Browse → Cart → Order (14 assertions); override: `USER_SVC=http://localhost:8001`
+- `bash script/e2e-payment.sh` — Kafka saga: Order → Payment → Confirm/Cancel (12 assertions)
+- `bash script/perf-baseline.sh` — single-threaded latency baseline (p50/avg/max per operation)
+- `bash script/loadtest-orders.sh` — 100 orders at 10 concurrent, asserts 0 PENDING + 0 DLQ
+
+---
+
+## product-service (Implemented)
 
 **Endpoints:**
 ```
@@ -180,8 +207,6 @@ GET  /health/ready                      # checks postgres + kafka
 - `internal/integration/payment_idempotency_test.go` — concurrent idempotency proof (10 goroutines, 1 winner)
 - `internal/integration/payment_kafka_test.go` — 4 Kafka resilience tests (testcontainers): poison DLQ, retry exhaustion DLQ, permanent decline no-DLQ, duplicate delivery idempotency
 
-**Scripts:**
-- `bash script/e2e-payment.sh` — full saga: login → create order → poll payment → verify CONFIRMED order → health check (12 assertions)
-- `bash script/loadtest-orders.sh` — 100 orders at 10 concurrent, asserts 0 PENDING + 0 DLQ
+**Scripts:** see Nginx section above — all scripts default to `http://localhost` (port 80).
 
 **Docs:** `docs/adrs/saga-resilience.md` · `payment-service/README.md`
