@@ -13,7 +13,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
   const { data, isLoading } = useCart()
   const { clearCart } = useCartMutations()
   const cart = data?.data
-  const items = cart?.items ?? []
+  const items = [...(cart?.items ?? [])].sort((a, b) => a.product_id - b.product_id)
 
   return (
     <>

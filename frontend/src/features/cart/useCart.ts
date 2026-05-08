@@ -44,7 +44,9 @@ export function useCartMutations() {
       queryClient.setQueryData<ApiResponse<Cart>>(['cart'], (old) => {
         if (!old?.data) return old
         const items = old.data.items.map((item) =>
-          item.product_id === productId ? { ...item, quantity } : item
+          item.product_id === productId
+            ? { ...item, quantity, subtotal: item.unit_price * quantity }
+            : item
         )
         const total = items.reduce((sum, i) => sum + i.subtotal, 0)
         const itemCount = items.reduce((sum, i) => sum + i.quantity, 0)

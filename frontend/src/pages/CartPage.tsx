@@ -9,7 +9,7 @@ export function CartPage() {
   const { data, isLoading, isError } = useCart()
   const { clearCart } = useCartMutations()
   const cart = data?.data
-  const items = cart?.items ?? []
+  const items = [...(cart?.items ?? [])].sort((a, b) => a.product_id - b.product_id)
 
   if (isLoading) {
     return (

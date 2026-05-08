@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { orderApi } from './orderApi'
-import { useCartStore } from '@/store/cartStore'
 import type { CreateOrderRequest } from '@/types/order'
 
 export function useOrders(page = 0) {
@@ -46,7 +45,6 @@ export function useCreateOrder() {
     mutationFn: (req: CreateOrderRequest) => orderApi.create(req),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cart'] })
-      useCartStore.getState().setItemCount(0)
     },
   })
 }

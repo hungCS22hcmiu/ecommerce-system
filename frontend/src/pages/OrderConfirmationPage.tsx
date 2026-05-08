@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useOrder } from '@/features/orders/useOrders'
 import { usePaymentStatus } from '@/features/payment/usePaymentStatus'
+import { useCartMutations } from '@/features/cart/useCart'
 import { formatCurrency } from '@/lib/utils'
 
 export function OrderConfirmationPage() {
@@ -9,12 +10,18 @@ export function OrderConfirmationPage() {
   const navigate = useNavigate()
   const { data: orderData } = useOrder(id ?? '')
   const { data: paymentData } = usePaymentStatus(id ?? '')
+  const { clearCart } = useCartMutations()
 
   const order = orderData?.data
   const payment = paymentData?.data
   const status = payment?.status
 
   const isTerminal = status === 'COMPLETED' || status === 'FAILED'
+
+  useEffect(() => {
+    if (status !== 'COMPLETED') return
+    clearCart.mutate()
+  }, [status])
 
   useEffect(() => {
     if (!isTerminal) return
