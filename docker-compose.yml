@@ -235,6 +235,14 @@ services:
     networks:
       - backend
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ecommerce-frontend
+    networks:
+      - backend
+
   nginx:
     image: nginx:alpine
     container_name: ecommerce-nginx
@@ -248,6 +256,7 @@ services:
       - cart-service
       - order-service
       - payment-service
+      - frontend
     networks:
       - backend
     restart: unless-stopped

@@ -15,6 +15,8 @@ import { CheckoutPage } from '@/pages/CheckoutPage'
 import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage'
 import { OrderHistoryPage } from '@/pages/OrderHistoryPage'
 import { OrderDetailPage } from '@/pages/OrderDetailPage'
+import { ProfilePage } from '@/pages/ProfilePage'
+import { ToastContainer } from '@/components/ui/Toast'
 
 function Layout() {
   return (
@@ -45,10 +47,12 @@ export default function App() {
               <Route path="/orders/:id/confirmation" element={<OrderConfirmationPage />} />
               <Route path="/orders" element={<OrderHistoryPage />} />
               <Route path="/orders/:id" element={<OrderDetailPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <ToastContainer />
         <ReactQueryDevtools initialIsOpen={false} />
       </QueryClientProvider>
     </BrowserRouter>

@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { useAuthStore } from '@/store/authStore'
+import { showToast } from '@/lib/toast'
 
 export const api = axios.create({ baseURL: '/api/v1' })
 
@@ -49,6 +50,17 @@ api.interceptors.response.use(
       } finally {
         isRefreshing = false
       }
+    }
+    return Promise.reject(error)
+  }
+)
+
+// Show toast only for true network failures (no response received)
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (!error.response && error.request) {
+      showToast('Network error. Please check your connection.', 'error')
     }
     return Promise.reject(error)
   }

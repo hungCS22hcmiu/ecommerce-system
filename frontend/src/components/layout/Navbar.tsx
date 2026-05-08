@@ -45,6 +45,14 @@ export function Navbar() {
                   >
                     Orders
                   </NavLink>
+                  <NavLink
+                    to="/profile"
+                    className={({ isActive }) =>
+                      `text-sm transition-colors ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`
+                    }
+                  >
+                    Profile
+                  </NavLink>
                 </div>
               )}
             </div>
