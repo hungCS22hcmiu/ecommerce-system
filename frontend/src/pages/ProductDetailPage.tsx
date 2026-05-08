@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useProduct } from '@/features/products/useProducts'
+import { useCartMutations } from '@/features/cart/useCart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,6 +16,7 @@ function StockBadge({ stock }: { stock: number }) {
 export function ProductDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { data, isLoading, isError } = useProduct(Number(id))
+  const { addItem } = useCartMutations()
   const [qty, setQty] = useState(1)
 
   const product = data?.data
@@ -112,9 +114,12 @@ export function ProductDetailPage() {
 
                 <Button
                   className="w-full sm:w-auto px-8"
-                  disabled={product.stockAvailable === 0}
+                  disabled={product.stockAvailable === 0 || addItem.isPending}
+                  onClick={() =>
+                    addItem.mutate({ product_id: product.id, quantity: qty })
+                  }
                 >
-                  Add to Cart
+                  {addItem.isPending ? 'Adding…' : 'Add to Cart'}
                 </Button>
               </div>
             </>

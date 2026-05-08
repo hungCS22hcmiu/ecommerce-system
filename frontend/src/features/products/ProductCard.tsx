@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency } from '@/lib/utils'
+import { useCartMutations } from '@/features/cart/useCart'
 import type { Product } from '@/types/product'
 
 function stockBadge(stock: number) {
@@ -17,6 +18,7 @@ interface ProductCardProps {
 
 export function ProductCard({ product }: ProductCardProps) {
   const outOfStock = product.stockAvailable === 0
+  const { addItem } = useCartMutations()
 
   return (
     <div className="bg-surface-raised border border-surface-border rounded-lg overflow-hidden flex flex-col group">
@@ -49,8 +51,15 @@ export function ProductCard({ product }: ProductCardProps) {
           {stockBadge(product.stockAvailable)}
         </div>
 
-        <Button className="w-full mt-1" disabled={outOfStock}>
-          Add to Cart
+        <Button
+          className="w-full mt-1"
+          disabled={outOfStock || addItem.isPending}
+          onClick={(e) => {
+            e.preventDefault()
+            addItem.mutate({ product_id: product.id, quantity: 1 })
+          }}
+        >
+          {addItem.isPending ? 'Adding…' : 'Add to Cart'}
         </Button>
       </div>
     </div>
