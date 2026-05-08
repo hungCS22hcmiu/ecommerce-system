@@ -7,7 +7,9 @@ import { Navbar } from '@/components/layout/Navbar'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { VerifyEmailPage } from '@/pages/VerifyEmailPage'
+import { HomePage } from '@/pages/HomePage'
 import { ProductListPage } from '@/pages/ProductListPage'
+import { ProductDetailPage } from '@/pages/ProductDetailPage'
 
 function Layout() {
   return (
@@ -30,11 +32,12 @@ export default function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<Navigate to="/products" replace />} />
+              <Route path="/" element={<HomePage />} />
               <Route path="/products" element={<ProductListPage />} />
+              <Route path="/products/:id" element={<ProductDetailPage />} />
             </Route>
           </Route>
-          <Route path="*" element={<Navigate to="/products" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <ReactQueryDevtools initialIsOpen={false} />
       </QueryClientProvider>
