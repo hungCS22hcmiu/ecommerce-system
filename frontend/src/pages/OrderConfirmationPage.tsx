@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useOrder } from '@/features/orders/useOrders'
 import { usePaymentStatus } from '@/features/payment/usePaymentStatus'
@@ -9,14 +9,16 @@ export function OrderConfirmationPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { data: orderData } = useOrder(id ?? '')
-  const { data: paymentData } = usePaymentStatus(id ?? '')
+  const { data: paymentData, isError: paymentError } = usePaymentStatus(id ?? '')
   const { clearCart } = useCartMutations()
+  const [timedOut, setTimedOut] = useState(false)
 
   const order = orderData?.data
   const payment = paymentData?.data
   const status = payment?.status
 
   const isTerminal = status === 'COMPLETED' || status === 'FAILED'
+  const isStuck = (timedOut || paymentError) && !isTerminal
 
   useEffect(() => {
     if (status !== 'COMPLETED') return
@@ -29,6 +31,12 @@ export function OrderConfirmationPage() {
     return () => clearTimeout(t)
   }, [isTerminal, navigate])
 
+  useEffect(() => {
+    if (isTerminal) return
+    const t = setTimeout(() => setTimedOut(true), 60_000)
+    return () => clearTimeout(t)
+  }, [isTerminal])
+
   return (
     <div className="max-w-xl mx-auto px-4 py-16 text-center">
       <p className="text-xs font-mono text-fg-subtle mb-2">Order Confirmation</p>
@@ -40,7 +48,7 @@ export function OrderConfirmationPage() {
 
       {/* Payment status indicator */}
       <div className="relative flex items-center justify-center mb-8">
-        {!isTerminal && (
+        {!isTerminal && !isStuck && (
           <>
             {/* Amber ping ring */}
             <span className="absolute inline-flex h-16 w-16 rounded-full bg-accent opacity-20 animate-ping" />
@@ -69,6 +77,14 @@ export function OrderConfirmationPage() {
           </>
         )}
 
+        {isStuck && (
+          <span className="inline-flex h-12 w-12 rounded-full bg-status-failed/20 border border-status-failed items-center justify-center">
+            <svg className="h-6 w-6 text-status-failed" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" />
+            </svg>
+          </span>
+        )}
+
         {status === 'COMPLETED' && (
           <span className="inline-flex h-12 w-12 rounded-full bg-status-delivered/20 border border-status-delivered items-center justify-center">
             <svg className="h-6 w-6 text-status-delivered" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -87,16 +103,27 @@ export function OrderConfirmationPage() {
       </div>
 
       <h1 className="font-display text-2xl text-fg-base mb-2">
-        {!isTerminal && 'Processing payment…'}
+        {!isTerminal && !isStuck && 'Processing payment…'}
+        {isStuck && 'Payment confirmation delayed'}
         {status === 'COMPLETED' && 'Payment confirmed!'}
         {status === 'FAILED' && 'Payment failed'}
       </h1>
 
       <p className="text-sm text-fg-subtle mb-8">
-        {!isTerminal && 'Your order is being processed. This usually takes a few seconds.'}
+        {!isTerminal && !isStuck && 'Your order is being processed. This usually takes a few seconds.'}
+        {isStuck && 'Payment confirmation is taking longer than expected. Your order has been placed.'}
         {status === 'COMPLETED' && 'Your order has been confirmed. Redirecting to orders…'}
         {status === 'FAILED' && 'Something went wrong with your payment. Redirecting…'}
       </p>
+
+      {isStuck && (
+        <button
+          onClick={() => navigate(`/orders/${id}`)}
+          className="mb-8 text-sm text-accent underline underline-offset-2"
+        >
+          View Order →
+        </button>
+      )}
 
       {/* Order summary */}
       {order && (

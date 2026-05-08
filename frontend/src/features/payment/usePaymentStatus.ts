@@ -10,6 +10,7 @@ export function usePaymentStatus(orderId: string) {
     queryFn: () => paymentApi.getByOrderId(orderId),
     enabled: !!orderId,
     refetchInterval: (query) => {
+      if (query.state.status === 'error') return false
       const status = query.state.data?.data?.status
       return status && TERMINAL.includes(status) ? false : 2000
     },

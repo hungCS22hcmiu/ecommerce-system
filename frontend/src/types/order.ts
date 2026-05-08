@@ -38,7 +38,7 @@ export interface OrderSummary {
 }
 
 export interface CreateOrderRequest {
-  cartId: string
+  cartId?: string
   items: { productId: number; quantity: number }[]
   shippingAddress: ShippingAddress
 }
