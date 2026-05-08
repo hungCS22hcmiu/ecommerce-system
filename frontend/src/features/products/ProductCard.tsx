@@ -31,14 +31,14 @@ export function ProductCard({ product }: ProductCardProps) {
           />
         ) : (
           <div className="w-full aspect-square bg-surface-overlay flex items-center justify-center">
-            <span className="text-zinc-700 text-sm">No image</span>
+            <span className="text-fg-subtle text-sm">No image</span>
           </div>
         )}
       </Link>
 
       <div className="p-4 flex flex-col gap-2 flex-1">
         <Link to={`/products/${product.id}`}>
-          <h3 className="font-display text-white truncate hover:text-accent transition-colors leading-tight">
+          <h3 className="font-display text-fg-base truncate hover:text-accent transition-colors leading-tight">
             {product.name}
           </h3>
         </Link>

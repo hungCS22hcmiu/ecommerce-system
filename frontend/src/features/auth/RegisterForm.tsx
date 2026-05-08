@@ -33,7 +33,7 @@ export function RegisterForm() {
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-sm text-zinc-400">First name</label>
+          <label className="text-sm text-fg-muted">First name</label>
           <Input
             name="first_name"
             placeholder="Jane"
@@ -46,7 +46,7 @@ export function RegisterForm() {
           )}
         </div>
         <div className="space-y-1">
-          <label className="text-sm text-zinc-400">Last name</label>
+          <label className="text-sm text-fg-muted">Last name</label>
           <Input
             name="last_name"
             placeholder="Doe"
@@ -61,7 +61,7 @@ export function RegisterForm() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm text-zinc-400">Email</label>
+        <label className="text-sm text-fg-muted">Email</label>
         <Input
           type="email"
           name="email"
@@ -77,7 +77,7 @@ export function RegisterForm() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm text-zinc-400">Password</label>
+        <label className="text-sm text-fg-muted">Password</label>
         <Input
           type="password"
           name="password"
@@ -87,7 +87,7 @@ export function RegisterForm() {
           required
           autoComplete="new-password"
         />
-        <p className="text-xs text-zinc-600">
+        <p className="text-xs text-fg-subtle">
           Min 8 chars · max 72 chars
         </p>
         {fieldError('password') && (
@@ -110,7 +110,7 @@ export function RegisterForm() {
         )}
       </Button>
 
-      <p className="text-center text-sm text-zinc-500">
+      <p className="text-center text-sm text-fg-subtle">
         Already have an account?{' '}
         <Link to="/login" className="text-accent hover:text-accent-dim">
           Sign in →

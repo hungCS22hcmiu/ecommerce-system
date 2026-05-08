@@ -46,13 +46,13 @@ function AddressForm({
           ] as [keyof AddressRequest, string][]
         ).map(([field, label]) => (
           <div key={field} className={field === 'address_line1' ? 'sm:col-span-2' : ''}>
-            <label className="block text-xs text-zinc-400 mb-1">{label}</label>
+            <label className="block text-xs text-fg-muted mb-1">{label}</label>
             <input
               type="text"
               value={form[field] ?? ''}
               onChange={(e) => set(field, e.target.value)}
               required={['address_line1', 'city', 'country'].includes(field)}
-              className="w-full bg-surface-overlay border border-surface-border rounded-md px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent transition-colors"
+              className="w-full bg-surface-overlay border border-surface-border rounded-md px-3 py-2 text-sm text-fg-base placeholder:text-fg-subtle focus:outline-none focus:border-accent transition-colors"
             />
           </div>
         ))}
@@ -139,17 +139,17 @@ export function ProfilePage() {
             <span className="font-mono font-semibold text-surface-base text-lg">{initials}</span>
           </div>
           <div>
-            <p className="text-white font-semibold">
+            <p className="text-fg-base font-semibold">
               {profile?.first_name} {profile?.last_name}
             </p>
-            <p className="text-sm text-zinc-500">{profile?.email}</p>
+            <p className="text-sm text-fg-subtle">{profile?.email}</p>
           </div>
         </div>
       )}
 
       {/* Personal Info */}
       <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-        <h2 className="text-sm font-semibold text-white mb-4">Personal Info</h2>
+        <h2 className="text-sm font-semibold text-fg-base mb-4">Personal Info</h2>
         {isLoading ? (
           <div className="space-y-3">
             <Skeleton className="h-9 w-full" />
@@ -160,33 +160,33 @@ export function ProfilePage() {
           <form onSubmit={handleSaveProfile} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">First Name</label>
+                <label className="block text-xs text-fg-muted mb-1">First Name</label>
                 <input
                   type="text"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   required
-                  className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent transition-colors"
+                  className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-fg-base focus:outline-none focus:border-accent transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">Last Name</label>
+                <label className="block text-xs text-fg-muted mb-1">Last Name</label>
                 <input
                   type="text"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   required
-                  className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent transition-colors"
+                  className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-fg-base focus:outline-none focus:border-accent transition-colors"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-zinc-400 mb-1">Phone (optional)</label>
+              <label className="block text-xs text-fg-muted mb-1">Phone (optional)</label>
               <input
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-accent transition-colors"
+                className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-fg-base focus:outline-none focus:border-accent transition-colors"
               />
             </div>
             <Button type="submit" disabled={updateProfile.isPending}>
@@ -198,7 +198,7 @@ export function ProfilePage() {
 
       {/* Addresses */}
       <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-        <h2 className="text-sm font-semibold text-white mb-4">Addresses</h2>
+        <h2 className="text-sm font-semibold text-fg-base mb-4">Addresses</h2>
 
         {isLoading ? (
           <div className="space-y-3">
@@ -216,16 +216,16 @@ export function ProfilePage() {
                         addr.is_default ? 'bg-accent border-accent' : 'border-zinc-500'
                       }`}
                     />
-                    <div className="text-xs text-zinc-300 leading-relaxed min-w-0">
+                    <div className="text-xs text-fg-muted leading-relaxed min-w-0">
                       {addr.label && (
-                        <span className="text-white font-medium block">
+                        <span className="text-fg-base font-medium block">
                           {addr.label}
                           {addr.is_default && (
                             <span className="ml-2 text-accent text-xs">(Default)</span>
                           )}
                         </span>
                       )}
-                      <span className="text-zinc-400">
+                      <span className="text-fg-muted">
                         {addr.address_line1}
                         {addr.address_line2 && `, ${addr.address_line2}`}, {addr.city}
                         {addr.state && `, ${addr.state}`}, {addr.country}
@@ -239,7 +239,7 @@ export function ProfilePage() {
                         type="button"
                         onClick={() => setDefault.mutate(addr.id)}
                         disabled={setDefault.isPending}
-                        className="text-xs text-zinc-500 hover:text-accent px-2 py-1 transition-colors disabled:opacity-40"
+                        className="text-xs text-fg-subtle hover:text-accent px-2 py-1 transition-colors disabled:opacity-40"
                       >
                         Default
                       </button>
@@ -247,7 +247,7 @@ export function ProfilePage() {
                     <button
                       type="button"
                       onClick={() => setEditingId(editingId === addr.id ? null : addr.id)}
-                      className="text-xs text-zinc-500 hover:text-white px-2 py-1 transition-colors"
+                      className="text-xs text-fg-subtle hover:text-fg-base px-2 py-1 transition-colors"
                     >
                       Edit
                     </button>
@@ -255,7 +255,7 @@ export function ProfilePage() {
                       type="button"
                       onClick={() => deleteAddress.mutate(addr.id)}
                       disabled={deleteAddress.isPending}
-                      className="text-xs text-zinc-500 hover:text-status-failed px-2 py-1 transition-colors disabled:opacity-40"
+                      className="text-xs text-fg-subtle hover:text-status-failed px-2 py-1 transition-colors disabled:opacity-40"
                     >
                       Delete
                     </button>

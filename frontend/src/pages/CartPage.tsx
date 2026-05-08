@@ -14,7 +14,7 @@ export function CartPage() {
   if (isLoading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <p className="text-zinc-500 text-sm">Loading cart…</p>
+        <p className="text-fg-subtle text-sm">Loading cart…</p>
       </div>
     )
   }
@@ -29,7 +29,7 @@ export function CartPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <h1 className="font-display text-3xl text-white mb-8">Your Cart</h1>
+      <h1 className="font-display text-3xl text-fg-base mb-8">Your Cart</h1>
 
       {items.length === 0 ? (
         <EmptyState
@@ -55,7 +55,7 @@ export function CartPage() {
               type="button"
               onClick={() => clearCart.mutate()}
               disabled={clearCart.isPending}
-              className="mt-4 text-xs text-zinc-600 hover:text-status-failed transition-colors disabled:opacity-40"
+              className="mt-4 text-xs text-fg-subtle hover:text-status-failed transition-colors disabled:opacity-40"
             >
               Clear cart
             </button>
@@ -64,23 +64,23 @@ export function CartPage() {
           {/* Summary column */}
           <div className="lg:col-span-1">
             <div className="bg-surface-raised border border-surface-border rounded-lg p-5 space-y-4">
-              <h2 className="font-semibold text-white text-sm">Order Summary</h2>
+              <h2 className="font-semibold text-fg-base text-sm">Order Summary</h2>
 
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-zinc-400">
+                  <span className="text-fg-muted">
                     Subtotal ({items.reduce((n, i) => n + i.quantity, 0)} items)
                   </span>
-                  <span className="font-mono text-white">{formatCurrency(cart?.total ?? 0)}</span>
+                  <span className="font-mono text-fg-base">{formatCurrency(cart?.total ?? 0)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-zinc-400">Shipping</span>
+                  <span className="text-fg-muted">Shipping</span>
                   <span className="font-mono text-status-delivered">Free</span>
                 </div>
               </div>
 
               <div className="border-t border-surface-border pt-3 flex justify-between">
-                <span className="text-white font-semibold">Total</span>
+                <span className="text-fg-base font-semibold">Total</span>
                 <span className="font-mono text-accent font-semibold text-lg">
                   {formatCurrency(cart?.total ?? 0)}
                 </span>

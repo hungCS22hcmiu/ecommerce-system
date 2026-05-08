@@ -36,7 +36,7 @@ export function ProductDetailPage() {
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <Link
         to="/products"
-        className="text-sm text-zinc-500 hover:text-white mb-6 inline-block transition-colors"
+        className="text-sm text-fg-subtle hover:text-fg-base mb-6 inline-block transition-colors"
       >
         ← Back to products
       </Link>
@@ -53,7 +53,7 @@ export function ProductDetailPage() {
               className="w-full h-full object-cover"
             />
           ) : (
-            <span className="text-zinc-700 text-sm">No image</span>
+            <span className="text-fg-subtle text-sm">No image</span>
           )}
         </div>
 
@@ -68,7 +68,7 @@ export function ProductDetailPage() {
             </>
           ) : product ? (
             <>
-              <h1 className="font-display text-4xl text-white leading-tight">{product.name}</h1>
+              <h1 className="font-display text-4xl text-fg-base leading-tight">{product.name}</h1>
 
               <p className="font-mono text-accent text-3xl font-medium">
                 {formatCurrency(product.price)}
@@ -76,36 +76,36 @@ export function ProductDetailPage() {
 
               <div className="border-t border-surface-border pt-4">
                 {product.description && (
-                  <p className="text-sm text-zinc-400 leading-relaxed mb-4">
+                  <p className="text-sm text-fg-muted leading-relaxed mb-4">
                     {product.description}
                   </p>
                 )}
 
                 <div className="flex items-center gap-3 mb-5">
                   <StockBadge stock={product.stockAvailable} />
-                  <span className="text-xs text-zinc-600 font-mono">
+                  <span className="text-xs text-fg-subtle font-mono">
                     {product.categoryName}
                   </span>
                 </div>
 
                 {/* Qty selector */}
                 <div className="flex items-center gap-3 mb-5">
-                  <span className="text-sm text-zinc-400">Quantity</span>
+                  <span className="text-sm text-fg-muted">Quantity</span>
                   <div className="flex items-center border border-surface-border rounded-md overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setQty((q) => Math.max(1, q - 1))}
                       disabled={qty <= 1 || product.stockAvailable === 0}
-                      className="w-9 h-9 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      className="w-9 h-9 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       −
                     </button>
-                    <span className="w-10 text-center text-sm font-mono text-white">{qty}</span>
+                    <span className="w-10 text-center text-sm font-mono text-fg-base">{qty}</span>
                     <button
                       type="button"
                       onClick={() => setQty((q) => Math.min(product.stockAvailable, q + 1))}
                       disabled={qty >= product.stockAvailable || product.stockAvailable === 0}
-                      className="w-9 h-9 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      className="w-9 h-9 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       +
                     </button>

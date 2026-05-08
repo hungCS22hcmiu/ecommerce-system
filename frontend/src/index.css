@@ -1,11 +1,16 @@
 @import "tailwindcss";
 
 @theme {
-  /* Surface colors */
+  /* Surface colors — dark defaults */
   --color-surface-base: #0a0a0b;
   --color-surface-raised: #111113;
   --color-surface-overlay: #18181b;
   --color-surface-border: #27272a;
+
+  /* Foreground colors — dark defaults */
+  --color-fg-base: #ffffff;
+  --color-fg-muted: #a1a1aa;
+  --color-fg-subtle: #71717a;
 
   /* Accent colors */
   --color-accent: #f59e0b;
@@ -26,10 +31,24 @@
   --font-sans: Inter, sans-serif;
 }
 
+/* Light theme overrides — applied when html[data-theme="light"] */
+[data-theme="light"] {
+  --color-surface-base: #f8fafc;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #f1f5f9;
+  --color-surface-border: #e2e8f0;
+  --color-fg-base: #0f172a;
+  --color-fg-muted: #475569;
+  --color-fg-subtle: #64748b;
+}
+
+/* Custom variant — use light: prefix for light-mode-only overrides */
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
 body {
   margin: 0;
-  background-color: #0a0a0b;
-  color: white;
+  background-color: var(--color-surface-base);
+  color: var(--color-fg-base);
   font-family: Inter, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

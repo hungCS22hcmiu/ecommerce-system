@@ -33,7 +33,7 @@ export function LoginForm() {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-1">
-        <label className="text-sm text-zinc-400">Email</label>
+        <label className="text-sm text-fg-muted">Email</label>
         <Input
           type="email"
           placeholder="you@example.com"
@@ -45,7 +45,7 @@ export function LoginForm() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm text-zinc-400">Password</label>
+        <label className="text-sm text-fg-muted">Password</label>
         <Input
           type="password"
           placeholder="••••••••••••"
@@ -81,7 +81,7 @@ export function LoginForm() {
         )}
       </Button>
 
-      <p className="text-center text-sm text-zinc-500">
+      <p className="text-center text-sm text-fg-subtle">
         No account?{' '}
         <Link to="/register" className="text-accent hover:text-accent-dim">
           Create one →

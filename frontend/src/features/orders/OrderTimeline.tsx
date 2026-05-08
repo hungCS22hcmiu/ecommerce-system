@@ -32,7 +32,7 @@ export function OrderTimeline({ history, createdAt }: OrderTimelineProps) {
   }
 
   if (entries.length === 0) {
-    return <p className="text-sm text-zinc-500">No history yet.</p>
+    return <p className="text-sm text-fg-subtle">No history yet.</p>
   }
 
   return (
@@ -48,12 +48,12 @@ export function OrderTimeline({ history, createdAt }: OrderTimelineProps) {
             )}
           </div>
           <div className="pb-5">
-            <p className="text-sm font-semibold text-white capitalize">
+            <p className="text-sm font-semibold text-fg-base capitalize">
               {entry.status.charAt(0) + entry.status.slice(1).toLowerCase()}
             </p>
-            <p className="text-xs text-zinc-500">{formatDate(entry.timestamp)}</p>
+            <p className="text-xs text-fg-subtle">{formatDate(entry.timestamp)}</p>
             {entry.reason && (
-              <p className="text-xs text-zinc-400 mt-0.5">{entry.reason}</p>
+              <p className="text-xs text-fg-muted mt-0.5">{entry.reason}</p>
             )}
           </div>
         </div>

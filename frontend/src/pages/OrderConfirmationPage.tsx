@@ -24,9 +24,9 @@ export function OrderConfirmationPage() {
 
   return (
     <div className="max-w-xl mx-auto px-4 py-16 text-center">
-      <p className="text-xs font-mono text-zinc-500 mb-2">Order Confirmation</p>
+      <p className="text-xs font-mono text-fg-subtle mb-2">Order Confirmation</p>
       {order && (
-        <p className="text-sm font-mono text-zinc-400 mb-8 truncate">
+        <p className="text-sm font-mono text-fg-muted mb-8 truncate">
           #{order.id.slice(0, 8).toUpperCase()}
         </p>
       )}
@@ -79,13 +79,13 @@ export function OrderConfirmationPage() {
         )}
       </div>
 
-      <h1 className="font-display text-2xl text-white mb-2">
+      <h1 className="font-display text-2xl text-fg-base mb-2">
         {!isTerminal && 'Processing payment…'}
         {status === 'COMPLETED' && 'Payment confirmed!'}
         {status === 'FAILED' && 'Payment failed'}
       </h1>
 
-      <p className="text-sm text-zinc-500 mb-8">
+      <p className="text-sm text-fg-subtle mb-8">
         {!isTerminal && 'Your order is being processed. This usually takes a few seconds.'}
         {status === 'COMPLETED' && 'Your order has been confirmed. Redirecting to orders…'}
         {status === 'FAILED' && 'Something went wrong with your payment. Redirecting…'}
@@ -94,21 +94,21 @@ export function OrderConfirmationPage() {
       {/* Order summary */}
       {order && (
         <div className="bg-surface-raised border border-surface-border rounded-lg p-5 text-left space-y-3">
-          <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+          <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider">
             Order Summary
           </h2>
           <div className="space-y-2">
             {order.items.map((item) => (
               <div key={item.id} className="flex justify-between text-sm">
-                <span className="text-zinc-300">
+                <span className="text-fg-muted">
                   {item.productName} × {item.quantity}
                 </span>
-                <span className="font-mono text-white">{formatCurrency(item.subtotal)}</span>
+                <span className="font-mono text-fg-base">{formatCurrency(item.subtotal)}</span>
               </div>
             ))}
           </div>
           <div className="border-t border-surface-border pt-3 flex justify-between text-sm">
-            <span className="text-white font-semibold">Total</span>
+            <span className="text-fg-base font-semibold">Total</span>
             <span className="font-mono text-accent font-semibold">
               {formatCurrency(order.totalAmount)}
             </span>
@@ -117,7 +117,7 @@ export function OrderConfirmationPage() {
       )}
 
       {isTerminal && (
-        <p className="text-xs text-zinc-600 mt-6">Redirecting in 3 seconds…</p>
+        <p className="text-xs text-fg-subtle mt-6">Redirecting in 3 seconds…</p>
       )}
     </div>
   )

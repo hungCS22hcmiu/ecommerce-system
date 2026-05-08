@@ -24,7 +24,7 @@ export function ToastContainer() {
               ? 'bg-status-delivered text-white'
               : t.level === 'error'
               ? 'bg-status-failed text-white'
-              : 'bg-surface-overlay border border-surface-border text-white'
+              : 'bg-surface-overlay border border-surface-border text-fg-base'
           }`}
         >
           {t.message}

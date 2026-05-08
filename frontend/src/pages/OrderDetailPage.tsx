@@ -30,7 +30,7 @@ export function OrderDetailPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <Link to="/orders" className="text-sm text-zinc-500 hover:text-white mb-6 inline-block transition-colors">
+      <Link to="/orders" className="text-sm text-fg-subtle hover:text-fg-base mb-6 inline-block transition-colors">
         ← Back to orders
       </Link>
 
@@ -47,10 +47,10 @@ export function OrderDetailPage() {
         <>
           <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
             <div>
-              <h1 className="font-display text-2xl text-white">
+              <h1 className="font-display text-2xl text-fg-base">
                 Order #{truncateId(order.id).toUpperCase()}
               </h1>
-              <p className="text-sm text-zinc-500 mt-1">{formatDate(order.createdAt)}</p>
+              <p className="text-sm text-fg-subtle mt-1">{formatDate(order.createdAt)}</p>
             </div>
             <StatusBadge status={order.status} />
           </div>
@@ -59,21 +59,21 @@ export function OrderDetailPage() {
             {/* Left — items + address */}
             <div className="lg:col-span-3 space-y-5">
               <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-                <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">
+                <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider mb-4">
                   Items
                 </h2>
                 <div className="space-y-3">
                   {order.items.map((item) => (
                     <div key={item.id} className="flex justify-between text-sm">
-                      <span className="text-zinc-300">
+                      <span className="text-fg-muted">
                         {item.productName} × {item.quantity}
                       </span>
-                      <span className="font-mono text-white">{formatCurrency(item.subtotal)}</span>
+                      <span className="font-mono text-fg-base">{formatCurrency(item.subtotal)}</span>
                     </div>
                   ))}
                 </div>
                 <div className="border-t border-surface-border pt-3 mt-3 flex justify-between text-sm">
-                  <span className="text-white font-semibold">Total</span>
+                  <span className="text-fg-base font-semibold">Total</span>
                   <span className="font-mono text-accent font-semibold">
                     {formatCurrency(order.totalAmount)}
                   </span>
@@ -81,10 +81,10 @@ export function OrderDetailPage() {
               </div>
 
               <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-                <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider mb-3">
                   Shipping Address
                 </h2>
-                <address className="text-sm text-zinc-300 not-italic leading-relaxed">
+                <address className="text-sm text-fg-muted not-italic leading-relaxed">
                   {order.shippingAddress.street}<br />
                   {order.shippingAddress.city}
                   {order.shippingAddress.state && `, ${order.shippingAddress.state}`}<br />
@@ -96,7 +96,7 @@ export function OrderDetailPage() {
             {/* Right — timeline + cancel */}
             <div className="lg:col-span-2">
               <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-                <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4">
+                <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider mb-4">
                   Status Timeline
                 </h2>
                 <OrderTimeline history={history} createdAt={order.createdAt} />

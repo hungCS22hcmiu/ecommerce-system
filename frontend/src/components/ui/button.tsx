@@ -10,9 +10,9 @@ const buttonVariants = cva(
         default:
           'bg-accent text-surface-base hover:bg-accent-dim',
         outline:
-          'border border-surface-border text-white hover:bg-surface-raised',
+          'border border-surface-border text-fg-base hover:bg-surface-raised',
         ghost:
-          'text-zinc-400 hover:text-white hover:bg-surface-raised',
+          'text-fg-muted hover:text-fg-base hover:bg-surface-raised',
         destructive:
           'bg-status-failed text-white hover:opacity-90',
       },

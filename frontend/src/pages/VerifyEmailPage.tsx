@@ -71,14 +71,14 @@ export function VerifyEmailPage() {
     <div className="min-h-screen bg-surface-base flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="font-display text-4xl text-white">SHOP</h1>
+          <h1 className="font-display text-4xl text-fg-base">SHOP</h1>
         </div>
 
         <div className="bg-surface-raised border border-surface-border rounded-lg p-8">
-          <h2 className="text-lg font-semibold text-white mb-1">Verify your email</h2>
-          <p className="text-sm text-zinc-500 mb-6">
+          <h2 className="text-lg font-semibold text-fg-base mb-1">Verify your email</h2>
+          <p className="text-sm text-fg-subtle mb-6">
             Enter the 6-digit code sent to{' '}
-            <span className="text-zinc-300 font-mono">{email}</span>
+            <span className="text-fg-muted font-mono">{email}</span>
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -94,7 +94,7 @@ export function VerifyEmailPage() {
                   onChange={(e) => handleChange(i, e.target.value)}
                   onKeyDown={(e) => handleKeyDown(i, e)}
                   onPaste={handlePaste}
-                  className="w-10 h-12 text-center text-lg font-mono text-white bg-surface-overlay border border-surface-border rounded-md focus:outline-none focus:ring-1 focus:ring-accent caret-accent"
+                  className="w-10 h-12 text-center text-lg font-mono text-fg-base bg-surface-overlay border border-surface-border rounded-md focus:outline-none focus:ring-1 focus:ring-accent caret-accent"
                 />
               ))}
             </div>
@@ -133,15 +133,15 @@ export function VerifyEmailPage() {
                 type="button"
                 onClick={handleResend}
                 disabled={cooldown > 0 || resend.isPending}
-                className="text-sm text-zinc-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="text-sm text-fg-subtle hover:text-fg-base disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {cooldown > 0 ? `Resend code in ${cooldown}s` : "Didn't receive a code? Resend"}
               </button>
             )}
           </div>
 
-          <p className="mt-4 text-center text-sm text-zinc-600">
-            <Link to="/login" className="text-zinc-500 hover:text-white">
+          <p className="mt-4 text-center text-sm text-fg-subtle">
+            <Link to="/login" className="text-fg-subtle hover:text-fg-base">
               ← Back to login
             </Link>
           </p>

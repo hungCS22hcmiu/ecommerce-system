@@ -20,7 +20,7 @@ export function OrderHistoryPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <h1 className="font-display text-3xl text-white mb-8">Order History</h1>
+      <h1 className="font-display text-3xl text-fg-base mb-8">Order History</h1>
 
       {isError && (
         <p className="text-sm text-status-failed mb-4">Failed to load orders. Please try again.</p>
@@ -41,7 +41,7 @@ export function OrderHistoryPage() {
       {(isLoading || orders.length > 0) && (
         <div className="bg-surface-raised border border-surface-border rounded-lg overflow-hidden">
           {/* Table header */}
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-surface-border text-xs text-zinc-500 uppercase tracking-wider font-semibold">
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-surface-border text-xs text-fg-subtle uppercase tracking-wider font-semibold">
             <span>Order</span>
             <span className="text-right">Items</span>
             <span className="text-right">Total</span>
@@ -69,15 +69,15 @@ export function OrderHistoryPage() {
                   className="w-full grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-4 border-b border-surface-border last:border-0 hover:bg-surface-overlay transition-colors text-left cursor-pointer"
                 >
                   <div>
-                    <p className="text-sm font-mono text-white">
+                    <p className="text-sm font-mono text-fg-base">
                       #{truncateId(order.id).toUpperCase()}
                     </p>
-                    <p className="text-xs text-zinc-500 mt-0.5">{formatDate(order.createdAt)}</p>
+                    <p className="text-xs text-fg-subtle mt-0.5">{formatDate(order.createdAt)}</p>
                   </div>
-                  <span className="text-sm text-zinc-400 self-center text-right">
+                  <span className="text-sm text-fg-muted self-center text-right">
                     {order.itemCount} item{order.itemCount !== 1 ? 's' : ''}
                   </span>
-                  <span className="text-sm font-mono text-white self-center text-right">
+                  <span className="text-sm font-mono text-fg-base self-center text-right">
                     {formatCurrency(order.totalAmount)}
                   </span>
                   <div className="self-center flex justify-end">
@@ -91,7 +91,7 @@ export function OrderHistoryPage() {
       {meta && <Pagination meta={meta} />}
 
       {meta && (
-        <p className="text-center text-xs text-zinc-600 mt-3">
+        <p className="text-center text-xs text-fg-subtle mt-3">
           {meta.totalElements} order{meta.totalElements !== 1 ? 's' : ''} total
         </p>
       )}

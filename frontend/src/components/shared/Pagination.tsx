@@ -30,7 +30,7 @@ export function Pagination({ meta }: PaginationProps) {
 
       {pages.map((p, i) =>
         p === '...' ? (
-          <span key={`ellipsis-${i}`} className="px-2 text-zinc-600">…</span>
+          <span key={`ellipsis-${i}`} className="px-2 text-fg-subtle">…</span>
         ) : (
           <PageLink key={p} href={buildHref(p as number)} active={p === currentPage}>
             {p}
@@ -58,7 +58,7 @@ function PageLink({
 }) {
   if (disabled) {
     return (
-      <span className="w-9 h-9 flex items-center justify-center rounded-md text-sm text-zinc-600 cursor-not-allowed">
+      <span className="w-9 h-9 flex items-center justify-center rounded-md text-sm text-fg-subtle cursor-not-allowed">
         {children}
       </span>
     )
@@ -70,7 +70,7 @@ function PageLink({
         'w-9 h-9 flex items-center justify-center rounded-md text-sm transition-colors',
         active
           ? 'bg-accent text-surface-base font-semibold'
-          : 'text-zinc-400 hover:text-white hover:bg-surface-raised'
+          : 'text-fg-muted hover:text-fg-base hover:bg-surface-raised'
       )}
     >
       {children}

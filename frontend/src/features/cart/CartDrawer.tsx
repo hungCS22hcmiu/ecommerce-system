@@ -33,11 +33,11 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-border">
-          <h2 className="font-display text-lg text-white">Your Cart</h2>
+          <h2 className="font-display text-lg text-fg-base">Your Cart</h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-zinc-500 hover:text-white transition-colors text-xl leading-none"
+            className="text-fg-subtle hover:text-fg-base transition-colors text-xl leading-none"
           >
             ✕
           </button>
@@ -46,10 +46,10 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
         {/* Items */}
         <div className="flex-1 overflow-y-auto px-5">
           {isLoading ? (
-            <p className="text-sm text-zinc-500 py-8 text-center">Loading cart…</p>
+            <p className="text-sm text-fg-subtle py-8 text-center">Loading cart…</p>
           ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <p className="text-zinc-500 text-sm">Your cart is empty</p>
+              <p className="text-fg-subtle text-sm">Your cart is empty</p>
               <Link to="/products" onClick={onClose}>
                 <Button variant="outline" size="sm">Browse Products</Button>
               </Link>
@@ -67,8 +67,8 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
         {items.length > 0 && (
           <div className="px-5 py-4 border-t border-surface-border space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-zinc-400">Total</span>
-              <span className="font-mono text-white font-medium">
+              <span className="text-fg-muted">Total</span>
+              <span className="font-mono text-fg-base font-medium">
                 {formatCurrency(cart?.total ?? 0)}
               </span>
             </div>
@@ -85,7 +85,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
               type="button"
               onClick={() => clearCart.mutate()}
               disabled={clearCart.isPending}
-              className="w-full text-xs text-zinc-600 hover:text-status-failed transition-colors disabled:opacity-40"
+              className="w-full text-xs text-fg-subtle hover:text-status-failed transition-colors disabled:opacity-40"
             >
               Clear cart
             </button>

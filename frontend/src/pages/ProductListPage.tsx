@@ -62,7 +62,7 @@ export function ProductListPage() {
       {meta && <Pagination meta={meta} />}
 
       {meta && (
-        <p className="text-center text-xs text-zinc-600 mt-3">
+        <p className="text-center text-xs text-fg-subtle mt-3">
           {meta.totalElements} product{meta.totalElements !== 1 ? 's' : ''}
         </p>
       )}

@@ -6,6 +6,7 @@ import { useLogout } from '@/features/auth/useAuth'
 import { CartDrawer } from '@/features/cart/CartDrawer'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { ThemeToggle } from '@/components/ui/ThemeToggle'
 
 export function Navbar() {
   const email = useAuthStore((s) => s.email)
@@ -23,7 +24,7 @@ export function Navbar() {
             <div className="flex items-center gap-8">
               <Link
                 to="/"
-                className="font-display text-xl text-white tracking-wide"
+                className="font-display text-xl text-fg-base tracking-wide"
               >
                 SHOP
               </Link>
@@ -32,7 +33,7 @@ export function Navbar() {
                   <NavLink
                     to="/products"
                     className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`
+                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
                     }
                   >
                     Products
@@ -40,7 +41,7 @@ export function Navbar() {
                   <NavLink
                     to="/orders"
                     className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`
+                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
                     }
                   >
                     Orders
@@ -48,7 +49,7 @@ export function Navbar() {
                   <NavLink
                     to="/profile"
                     className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-white' : 'text-zinc-400 hover:text-white'}`
+                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
                     }
                   >
                     Profile
@@ -60,15 +61,17 @@ export function Navbar() {
             <div className="flex items-center gap-3">
               {isLoggedIn ? (
                 <>
-                  <span className="text-xs text-zinc-500 font-mono hidden sm:block">
+                  <span className="text-xs text-fg-subtle font-mono hidden sm:block">
                     {email}
                   </span>
+
+                  <ThemeToggle />
 
                   {/* Cart button */}
                   <button
                     type="button"
                     onClick={() => setCartOpen(true)}
-                    className="relative flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors px-2 py-1"
+                    className="relative flex items-center gap-1.5 text-fg-muted hover:text-fg-base transition-colors px-2 py-1"
                   >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"

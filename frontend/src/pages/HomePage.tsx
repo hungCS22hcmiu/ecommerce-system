@@ -19,7 +19,7 @@ export function HomePage() {
         />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
           <h1
-            className="font-display text-6xl sm:text-7xl text-white leading-tight mb-6"
+            className="font-display text-6xl sm:text-7xl text-fg-base leading-tight mb-6"
             style={{ animation: 'fadeUp 0.6s ease both' }}
           >
             Everything you need,
@@ -27,7 +27,7 @@ export function HomePage() {
             shipped to your door.
           </h1>
           <p
-            className="text-zinc-400 text-lg mb-8 max-w-lg"
+            className="text-fg-muted text-lg mb-8 max-w-lg"
             style={{ animation: 'fadeUp 0.6s ease 0.15s both' }}
           >
             Browse our full catalog of products, from electronics to essentials.
@@ -43,8 +43,8 @@ export function HomePage() {
       {/* Featured products */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-white">Featured Products</h2>
-          <Link to="/products" className="text-sm text-zinc-500 hover:text-accent transition-colors">
+          <h2 className="text-xl font-semibold text-fg-base">Featured Products</h2>
+          <Link to="/products" className="text-sm text-fg-subtle hover:text-accent transition-colors">
             View all →
           </Link>
         </div>

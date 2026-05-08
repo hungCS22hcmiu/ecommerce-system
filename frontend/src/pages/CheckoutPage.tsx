@@ -79,14 +79,14 @@ export function CheckoutPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <h1 className="font-display text-3xl text-white mb-8">Checkout</h1>
+      <h1 className="font-display text-3xl text-fg-base mb-8">Checkout</h1>
 
       <form onSubmit={handleSubmit}>
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
           {/* Address form */}
           <div className="lg:col-span-3 space-y-5">
             <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-              <h2 className="font-semibold text-white text-sm mb-4">Shipping Address</h2>
+              <h2 className="font-semibold text-fg-base text-sm mb-4">Shipping Address</h2>
 
               {/* Saved addresses */}
               {saved.length > 0 && (
@@ -107,8 +107,8 @@ export function CheckoutPage() {
                         onChange={() => handleSavedSelect(a)}
                         className="mt-0.5 accent-amber-500"
                       />
-                      <div className="text-xs text-zinc-300 leading-relaxed">
-                        <span className="text-white font-medium">
+                      <div className="text-xs text-fg-muted leading-relaxed">
+                        <span className="text-fg-base font-medium">
                           {a.label ?? 'Address'}
                           {a.is_default && (
                             <span className="ml-2 text-accent text-xs">(Default)</span>
@@ -136,13 +136,13 @@ export function CheckoutPage() {
                   ] as [keyof ShippingAddress, string][]
                 ).map(([field, label]) => (
                   <div key={field}>
-                    <label className="block text-xs text-zinc-400 mb-1">{label}</label>
+                    <label className="block text-xs text-fg-muted mb-1">{label}</label>
                     <input
                       type="text"
                       value={address[field]}
                       onChange={(e) => handleField(field, e.target.value)}
                       required
-                      className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-accent transition-colors"
+                      className="w-full bg-surface-base border border-surface-border rounded-md px-3 py-2 text-sm text-fg-base placeholder:text-fg-subtle focus:outline-none focus:border-accent transition-colors"
                     />
                   </div>
                 ))}
@@ -153,15 +153,15 @@ export function CheckoutPage() {
           {/* Order summary */}
           <div className="lg:col-span-2">
             <div className="bg-surface-raised border border-surface-border rounded-lg p-5 space-y-4 sticky top-6">
-              <h2 className="font-semibold text-white text-sm">Order Summary</h2>
+              <h2 className="font-semibold text-fg-base text-sm">Order Summary</h2>
 
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {items.map((item) => (
                   <div key={item.product_id} className="flex justify-between text-xs">
-                    <span className="text-zinc-400 truncate pr-2">
+                    <span className="text-fg-muted truncate pr-2">
                       {item.product_name} × {item.quantity}
                     </span>
-                    <span className="font-mono text-white flex-shrink-0">
+                    <span className="font-mono text-fg-base flex-shrink-0">
                       {formatCurrency(item.subtotal)}
                     </span>
                   </div>
@@ -170,11 +170,11 @@ export function CheckoutPage() {
 
               <div className="border-t border-surface-border pt-3">
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-zinc-400">Shipping</span>
+                  <span className="text-fg-muted">Shipping</span>
                   <span className="font-mono text-status-delivered text-xs">Free</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-white font-semibold text-sm">Total</span>
+                  <span className="text-fg-base font-semibold text-sm">Total</span>
                   <span className="font-mono text-accent font-semibold">
                     {formatCurrency(cart?.total ?? 0)}
                   </span>
