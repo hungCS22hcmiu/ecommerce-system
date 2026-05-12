@@ -80,13 +80,21 @@ Java 21, Spring Boot 3.5, Lombok. Flyway enabled (`ddl-auto: none`, migrations i
 
 ## Key Files
 - `docker-compose.yml` — full stack with health checks (includes Nginx on port 80)
-- `nginx/nginx.conf` — reverse proxy: routes, rate limiting (10r/s general + 5r/min auth), CORS (localhost:3000), security headers (CSP, Referrer-Policy), blocked internal routes
-- `docs/security-checklist.md` — OWASP API Top 10 audit results, per-service status, deferred items
+- `nginx/nginx.conf` — reverse proxy: routes, rate limiting (10r/s general + 5r/min auth), CORS (localhost:3001), security headers (CSP, Referrer-Policy), blocked internal routes
 - `script/init-databases.sql` — all 5 DB schemas (307 lines)
 - `script/sample_users.sql` — 1 admin / 1 customer / 1 seller (pre-verified)
 - `api/openapi.yaml` — full REST API contract
-- `docs/adr/locking-strategy.md` — concurrency rationale per service
 - `.env.example` — all 43 env vars
+- `cart-service/README.md` — cart-service deep dive: Redis WATCH, circuit breaker, sync worker, integration tests
+- `docs/technical/service_integration.md` — inter-service communication: HTTP calls, Kafka topics, JWT flow, Nginx routing (Mermaid diagrams)
+- `docs/technical/architecture.md` — overall system design and data flow
+- `docs/technical/security-checklist.md` — OWASP API Top 10 audit results, per-service status, deferred items
+- `docs/technical/databaseMigration.md` — migration strategy (golang-migrate + Flyway)
+- `docs/technical/testing.md` — testing strategy and coverage targets
+- `docs/technical/convention.md` — code style and API conventions
+- `docs/technical/development.md` — development environment setup
+- `docs/adrs/locking-strategy.md` — concurrency rationale per service
+- `docs/adrs/saga-resilience.md` — Kafka saga and DLQ design decisions
 
 ## Nginx (Active)
 
