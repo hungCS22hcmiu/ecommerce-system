@@ -14,7 +14,8 @@ export function useLogin() {
       useAuthStore.getState().setAuth(
         { accessToken: access_token, refreshToken: refresh_token },
         user.id,
-        user.email
+        user.email,
+        user.role
       )
       const from = searchParams.get('from') ?? '/products'
       navigate(from, { replace: true })

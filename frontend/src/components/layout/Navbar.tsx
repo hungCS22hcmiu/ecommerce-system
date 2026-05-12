@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/ui/ThemeToggle'
 export function Navbar() {
   const email = useAuthStore((s) => s.email)
   const accessToken = useAuthStore((s) => s.accessToken)
+  const role = useAuthStore((s) => s.role)
   const itemCount = useCartStore((s) => s.itemCount)
   const logout = useLogout()
   const isLoggedIn = !!accessToken
@@ -38,6 +39,16 @@ export function Navbar() {
                   >
                     Products
                   </NavLink>
+                  {role === 'seller' && (
+                    <NavLink
+                      to="/seller/products"
+                      className={({ isActive }) =>
+                        `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                      }
+                    >
+                      My Products
+                    </NavLink>
+                  )}
                   <NavLink
                     to="/orders"
                     className={({ isActive }) =>

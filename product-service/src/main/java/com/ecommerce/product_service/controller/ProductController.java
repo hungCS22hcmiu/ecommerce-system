@@ -44,15 +44,21 @@ public class ProductController {
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<ProductResponse> getProduct(@PathVariable Long id) {
-        return ApiResponse.ok(productService.getProduct(id));
+    public ApiResponse<ProductResponse> getProduct(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Seller-Id", required = false) UUID sellerId) {
+        return ApiResponse.ok(productService.getProduct(id, sellerId));
     }
 
     @GetMapping
     public ApiResponse<List<ProductSummaryResponse>> listProducts(
+            @RequestParam(required = false) UUID sellerId,
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) ProductStatus status,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        if (sellerId != null) {
+            return ApiResponse.ok(productService.listProductsBySeller(sellerId, status, pageable));
+        }
         return ApiResponse.ok(productService.listProducts(categoryId, status, pageable));
     }
 

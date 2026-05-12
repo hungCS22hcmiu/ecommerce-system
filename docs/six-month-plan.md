@@ -489,7 +489,7 @@ It's the **read-heavy, catalog service** that everything else depends on. Cart n
 
 ---
 
-## Phase 5: React Frontend (Month 5 — Weeks 17–20)
+## Phase 5: React Frontend (Month 5 — Weeks 17–20) ✅ DONE
 
 ### Why Add a Frontend?
 
@@ -497,21 +497,24 @@ The backend is production-quality — but a portfolio project that no one can se
 
 This phase is **not about becoming a frontend engineer**. It is about building enough UI to showcase the backend patterns you already know: the JWT refresh flow, the Kafka saga's async payment status, the order state machine timeline. The goal is a functional, clean UI — not a pixel-perfect design system.
 
-### Month 5 Goals
-- React 18 + TypeScript project scaffolded and dockerized
-- JWT auth flow with queue-based 401 interceptor
-- Product catalog with search and pagination
-- Cart with optimistic updates
-- Checkout → order creation → payment polling (saga visible in browser)
-- Order history with status timeline
-- Profile and address management
+### Month 5 Goals ✅ ALL COMPLETE
+- ✅ React 19 + TypeScript project scaffolded and dockerized (port 3001)
+- ✅ JWT auth flow with queue-based 401 interceptor
+- ✅ Product catalog with search, pagination, and multi-image gallery
+- ✅ Cart with optimistic updates
+- ✅ Checkout → order creation → payment polling (saga visible in browser)
+- ✅ Order history with status timeline
+- ✅ Profile and address management
+- ✅ **Bonus:** Dark/light theme toggle
+- ✅ **Bonus:** Email verification page
+- ✅ **Bonus:** Seller product management (list/create/edit/delete + category combobox)
 
-### Tech Stack
+### Tech Stack (Actual)
 
 | Tool | Version | Reason |
 |------|---------|--------|
-| **React 18 + TypeScript** | latest | Type safety catches API contract mismatches at compile time |
-| **Vite** | 5.x | Fast HMR dev server; faster Docker builds than CRA |
+| **React 19 + TypeScript** | latest | Type safety catches API contract mismatches at compile time |
+| **Vite** | 8.x | Fast HMR dev server; faster Docker builds than CRA |
 | **TanStack Query** | 5.x | Server state, caching, polling (`refetchInterval`) — eliminates manual useEffect+useState for every API call |
 | **Zustand** | 4.x | accessToken in memory (XSS-safe), cart item count badge — two stores, zero boilerplate |
 | **Axios** | 1.x | Interceptor API for 401→refresh→retry; cleaner than native fetch for this pattern |
@@ -521,7 +524,7 @@ This phase is **not about becoming a frontend engineer**. It is about building e
 
 **Not adding:** Redux, GraphQL, Next.js, react-hook-form (too much ceremony for this project size).
 
-### Project Structure
+### Project Structure (As Built)
 
 ```
 frontend/
@@ -529,44 +532,52 @@ frontend/
 │   ├── lib/
 │   │   ├── axios.ts          # Axios instance + queue-based 401 interceptor
 │   │   ├── queryClient.ts    # TanStack Query global config
-│   │   └── utils.ts          # cn(), formatCurrency, formatDate
+│   │   ├── toast.ts          # Global toast helper
+│   │   └── utils.ts          # cn(), formatCurrency, formatDate, extractApiError
 │   ├── store/
-│   │   ├── authStore.ts      # Zustand: accessToken (memory), userId, email
-│   │   └── cartStore.ts      # Zustand: itemCount for Navbar badge
-│   ├── types/                # api.ts, auth.ts, product.ts, cart.ts, order.ts, payment.ts
+│   │   ├── authStore.ts      # Zustand: accessToken (memory), userId, email, role
+│   │   ├── cartStore.ts      # Zustand: itemCount for Navbar badge
+│   │   └── themeStore.ts     # Zustand: dark/light theme (persisted)
+│   ├── types/                # api.ts, auth.ts, product.ts, cart.ts, order.ts, payment.ts, seller.ts, category.ts
 │   ├── components/
-│   │   ├── ui/               # shadcn/ui copies
-│   │   ├── layout/           # Navbar, Footer, PageLayout
-│   │   └── shared/           # LoadingSpinner, ErrorMessage, EmptyState, Pagination
+│   │   ├── ui/               # Button, Input, Badge, Skeleton, Toast, ThemeToggle
+│   │   ├── layout/           # Navbar (role-aware)
+│   │   └── shared/           # EmptyState, Pagination
 │   ├── features/
 │   │   ├── auth/             # LoginForm, RegisterForm, useAuth, authApi, ProtectedRoute
 │   │   ├── products/         # ProductCard, ProductGrid, SearchBar, useProducts, productApi
 │   │   ├── cart/             # CartDrawer, CartItem, useCart, useCartMutations, cartApi
-│   │   ├── orders/           # OrderList, OrderDetail, OrderTimeline, CheckoutForm, orderApi
-│   │   ├── payment/          # PaymentStatusPoller, usePaymentStatus, paymentApi
-│   │   └── profile/          # ProfileForm, AddressManager, profileApi
+│   │   ├── orders/           # OrderTimeline, StatusBadge, useOrders, orderApi
+│   │   ├── payment/          # usePaymentStatus, paymentApi
+│   │   ├── profile/          # useProfile, profileApi
+│   │   └── seller/           # SellerRoute, ProductForm, ProductStatusBadge, DeleteConfirmDialog,
+│   │                         # CategoryCombobox, sellerApi, useSellerProducts, categoryApi, useCategories
 │   └── pages/                # One file per route (see routes table below)
 ├── vite.config.ts            # proxy /api → localhost:80
 └── .env.local                # VITE_API_BASE_URL=http://localhost/api/v1
 ```
 
-### Pages / Routes
+### Pages / Routes (As Built)
 
 | Route | Page | Auth | Data Sources |
 |-------|------|------|-------------|
 | `/` | HomePage | No | GET /products (first 8) |
 | `/login` | LoginPage | No (redirect if authed) | — |
 | `/register` | RegisterPage | No | — |
+| `/verify-email` | VerifyEmailPage | No | GET /auth/verify-email |
 | `/products` | ProductListPage | No | GET /products?page=&q= |
-| `/products/:id` | ProductDetailPage | No | GET /products/:id, GET /inventory/:id |
+| `/products/:id` | ProductDetailPage | No | GET /products/:id (multi-image gallery) |
 | `/cart` | CartPage | Yes | GET /cart |
 | `/checkout` | CheckoutPage | Yes | GET /cart, GET /users/profile |
 | `/orders/:id/confirmation` | OrderConfirmationPage | Yes | GET /orders/:id, GET /payments/order/:id (polled) |
 | `/orders` | OrderHistoryPage | Yes | GET /orders?page= |
 | `/orders/:id` | OrderDetailPage | Yes | GET /orders/:id, GET /orders/:id/history |
 | `/profile` | ProfilePage | Yes | GET /users/profile |
+| `/seller/products` | SellerDashboardPage | Yes (role=seller) | GET /products?sellerId= |
+| `/seller/products/new` | SellerCreateProductPage | Yes (role=seller) | POST /products |
+| `/seller/products/:id/edit` | SellerEditProductPage | Yes (role=seller) | GET + PUT /products/:id |
 
-### Week 17 — Project Setup + Auth Flow
+### Week 17 — Project Setup + Auth Flow ✅ DONE
 
 **Learning Topics:**
 - React component model vs Go handlers: where does business logic live?
@@ -596,7 +607,7 @@ frontend/
 
 **Deliverable:** Login, register, protected routes working. JWT interceptor with queue-based refresh proven by manual test.
 
-### Week 18 — Product Catalog
+### Week 18 — Product Catalog ✅ DONE
 
 **Learning Topics:**
 - TanStack Query: `useQuery` lifecycle, `queryKey` design, `staleTime` vs `gcTime`
@@ -624,7 +635,7 @@ frontend/
 
 **Deliverable:** Full product catalog browsable with search, pagination, and detail page.
 
-### Week 19 — Cart + Checkout + Order + Payment Polling
+### Week 19 — Cart + Checkout + Order + Payment Polling ✅ DONE
 
 This is the most technically complex week. Three features connect in sequence; the payment polling pattern is unique to this system.
 
@@ -676,7 +687,7 @@ This is the most technically complex week. Three features connect in sequence; t
 
 **Deliverable:** Complete purchase flow in browser. Add to cart → checkout → place order → payment polled → confirmation shown. The Kafka saga is visible.
 
-### Week 20 — Order History + Profile + Polish
+### Week 20 — Order History + Profile + Polish ✅ DONE
 
 **Learning Topics:**
 - React error boundaries: query `error` state vs `<ErrorBoundary>` — when to use each
@@ -714,7 +725,7 @@ This is the most technically complex week. Three features connect in sequence; t
 - Error state: stop a backend service → product page shows `<ErrorMessage>`, app does not crash
 - `npm run build` → zero TypeScript errors
 
-**Milestone:** A fully functional e-commerce frontend connected to the real backend. Every feature visible in a browser with zero curl commands. The Kafka saga is transparent to the user.
+**Milestone:** ✅ A fully functional e-commerce frontend connected to the real backend. Every feature visible in a browser with zero curl commands. The Kafka saga is transparent to the user. Bonus: seller product management with role-based routing, dark/light theme, and email verification flow.
 
 ---
 
@@ -1018,7 +1029,7 @@ Manual `useEffect` for data fetching requires you to handle: loading state, erro
 | End of Month 2 | ✅ End-to-end order flow | Core business logic works, services talk to each other |
 | End of Month 3 | ✅ Kafka saga + Nginx gateway | Async distributed transaction + single entry point for frontend |
 | End of Month 4 | ✅ Tested + hardened | Production-quality code, not just "it works on my machine" |
-| **End of Week 20** | **React frontend live** | **System is demoable in a browser — no curl required** |
+| **End of Week 20** | ✅ **React frontend live** | **System is demoable in a browser — no curl required** |
 | End of Month 6 | AI search working | Differentiating feature that shows breadth |
 | End of Month 7 | Deployed + interview-ready | Live system you can demo, stories you can tell |
 

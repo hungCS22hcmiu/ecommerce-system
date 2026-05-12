@@ -16,7 +16,11 @@ public interface ProductService {
 
     ProductResponse getProduct(Long id);
 
+    ProductResponse getProduct(Long id, UUID sellerId);
+
     Page<ProductSummaryResponse> listProducts(Long categoryId, ProductStatus status, Pageable pageable);
+
+    Page<ProductSummaryResponse> listProductsBySeller(UUID sellerId, ProductStatus status, Pageable pageable);
 
     Page<ProductSummaryResponse> searchProducts(String query, Pageable pageable);
 
