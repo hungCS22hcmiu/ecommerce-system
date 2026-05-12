@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/cache"
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/client"
+	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/dto"
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/handler"
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/middleware"
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/repository"
@@ -380,4 +382,83 @@ func TestCartTTL_Integration(t *testing.T) {
 	sevenDays := 7 * 24 * time.Hour
 	assert.Greater(t, ttl, sevenDays-10*time.Second)
 	assert.LessOrEqual(t, ttl, sevenDays)
+}
+
+// TestDegradedMode_CircuitOpen_ReadOpsStillWork proves the degraded-mode guarantee:
+// when the product-service circuit breaker is OPEN, AddItem fails fast (no HTTP made),
+// but GetCart / UpdateItem / RemoveItem / ClearCart continue to work because they are
+// pure Redis paths that bypass the product client entirely.
+//
+// The shared testRedisRepo / testCartRepo vars mean items added through the working
+// testServer are immediately visible to the broken service instance.
+//
+// Note: opening the circuit requires 5 × 3-retry calls (~3 s total due to backoffs).
+func TestDegradedMode_CircuitOpen_ReadOpsStillWork(t *testing.T) {
+	userID := uuid.New()
+	defer cleanupUser(userID)
+	ctx := context.Background()
+
+	// Step 1: Pre-populate cart via the working testServer (circuit closed, products resolve).
+	resp := doRequest("POST", "/api/v1/cart/items", map[string]any{"product_id": 1, "quantity": 2}, userID)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "pre-populate product 1")
+	resp.Body.Close()
+
+	resp = doRequest("POST", "/api/v1/cart/items", map[string]any{"product_id": 2, "quantity": 3}, userID)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "pre-populate product 2")
+	resp.Body.Close()
+
+	// Step 2: Build a broken product service that always returns 500.
+	var hitCount atomic.Int32
+	brokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitCount.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer brokenSrv.Close()
+
+	// Step 3: Build a cart service that uses the broken client but shares repos with testServer.
+	brokenClient := client.NewProductClient(brokenSrv.URL)
+	brokenSvc := service.NewCartService(testRedisRepo, testCartRepo, brokenClient)
+
+	// Step 4: Open the circuit — 5 calls × 3 retries each = RecordFailure × 5 → OPEN.
+	for i := 0; i < 5; i++ {
+		_, _ = brokenClient.GetProduct(ctx, 1)
+	}
+	hitsToOpen := hitCount.Load()
+	require.Equal(t, int32(15), hitsToOpen, "5 calls × 3 retries must produce exactly 15 server hits")
+
+	// Step 5: AddItem must fail fast — circuit is OPEN, no HTTP request made.
+	_, err := brokenSvc.AddItem(ctx, userID, dto.AddItemRequest{ProductID: 3, Quantity: 1})
+	assert.ErrorIs(t, err, service.ErrProductServiceUnavailable, "AddItem must return ErrProductServiceUnavailable when circuit is open")
+	assert.Equal(t, hitsToOpen, hitCount.Load(), "open circuit: AddItem must not hit the product server")
+
+	// Step 6: GetCart must succeed — pure Redis read, no product client involved.
+	cart, err := brokenSvc.GetCart(ctx, userID)
+	require.NoError(t, err, "GetCart must work in degraded mode")
+	assert.Len(t, cart.Items, 2, "GetCart must return the 2 pre-populated items")
+
+	// Step 7: UpdateItem must succeed — pure Redis update, no product client involved.
+	cart, err = brokenSvc.UpdateItem(ctx, userID, 1, dto.UpdateItemRequest{Quantity: 5})
+	require.NoError(t, err, "UpdateItem must work in degraded mode")
+	var found bool
+	for _, item := range cart.Items {
+		if item.ProductID == 1 {
+			assert.Equal(t, 5, item.Quantity, "product 1 quantity must be updated to 5")
+			found = true
+		}
+	}
+	assert.True(t, found, "product 1 must still be in cart after UpdateItem")
+
+	// Step 8: RemoveItem must succeed — pure Redis delete.
+	err = brokenSvc.RemoveItem(ctx, userID, 1)
+	require.NoError(t, err, "RemoveItem must work in degraded mode")
+	cart, err = brokenSvc.GetCart(ctx, userID)
+	require.NoError(t, err)
+	assert.Len(t, cart.Items, 1, "cart must have 1 item after removing product 1")
+
+	// Step 9: ClearCart must succeed — clears both Redis and Postgres.
+	err = brokenSvc.ClearCart(ctx, userID)
+	require.NoError(t, err, "ClearCart must work in degraded mode")
+	cart, err = brokenSvc.GetCart(ctx, userID)
+	require.NoError(t, err)
+	assert.Empty(t, cart.Items, "cart must be empty after ClearCart")
 }

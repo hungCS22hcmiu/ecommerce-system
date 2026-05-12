@@ -33,6 +33,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
 )
 
 // TestProfileFlow_WithContainers spins up real Postgres and Redis containers,
@@ -93,7 +94,8 @@ func TestProfileFlow_WithContainers(t *testing.T) {
 	sc := session.New(rdb)
 	ac := loginattempt.New(rdb)
 
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, privKey, pubKey)
+	vs := verification.New(rdb)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey)
 	userSvc := service.NewUserService(userRepo, addrRepo, sc)
 
 	authHandler := handler.NewAuthHandler(authSvc)
