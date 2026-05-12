@@ -103,6 +103,80 @@ Called after stock is reserved to capture `name` and `price` for the order item 
 
 The order-to-payment flow is a choreography saga — no central orchestrator. Each service reacts to events on topics it subscribes to.
 
+### Event-Driven Architecture
+
+```mermaid
+flowchart LR
+    subgraph Producers
+        OS["order-service\n(Java/Spring Boot)"]
+        PAY["payment-service\n(Go)"]
+    end
+
+    subgraph Kafka Broker["Kafka Broker (kafka:29092)"]
+        direction TB
+        T1[["orders.created\n3 partitions\nkey = orderId"]]
+        T2[["payments.completed\n3 partitions"]]
+        T3[["payments.failed\n3 partitions"]]
+        T4[["payments.dlq\n(dead letter queue)"]]
+    end
+
+    subgraph Consumers
+        PAY2["payment-service\ngroup: payment-service\nworker pool: 5 goroutines\noffset: manual commit"]
+        OS2["order-service\nSpring Kafka listener\n@KafkaListener"]
+    end
+
+    subgraph GW["Payment Gateway"]
+        MOCK["mock gateway\n90% success rate"]
+    end
+
+    OS -->|"publish\nOrderCreatedEvent"| T1
+    T1 -->|"consume\nStartOffset=earliest"| PAY2
+    PAY2 --> MOCK
+
+    MOCK -->|"success"| PAY
+    MOCK -->|"ErrGatewayDeclined"| PAY
+
+    PAY -->|"PaymentCompletedEvent\n__TypeId__ header"| T2
+    PAY -->|"PaymentFailedEvent\n__TypeId__ header"| T3
+    PAY -->|"deserialize error\nor retry exhaustion"| T4
+
+    T2 -->|"onPaymentCompleted()\nPENDING → CONFIRMED"| OS2
+    T3 -->|"onPaymentFailed()\nPENDING → CANCELLED\n+ release stock"| OS2
+
+    style T1 fill:#f5a623,color:#000
+    style T2 fill:#7ed321,color:#000
+    style T3 fill:#d0021b,color:#fff
+    style T4 fill:#9b9b9b,color:#fff
+    style MOCK fill:#4a90e2,color:#fff
+```
+
+### Retry & DLQ Routing
+
+```mermaid
+flowchart TD
+    MSG[Kafka message received] --> DS{Deserializable?}
+    DS -->|No - poison pill| DLQ["payments.dlq\nerrorStage: deserialize"]
+    DS -->|Yes| PP[ProcessPayment]
+    PP --> ERR{Error type?}
+    ERR -->|ErrGatewayDeclined\npermanent| FAIL["publish payments.failed\nno retry, no DLQ"]
+    ERR -->|transient\nDB / timeout| R1[retry attempt 1\nwait 100ms]
+    R1 --> R2[retry attempt 2\nwait 200ms]
+    R2 --> R3[retry attempt 3\nwait 400ms]
+    R3 -->|still failing| DLQ2["payments.dlq\nerrorStage: process\nattempts: 3"]
+    ERR -->|nil - success| DONE["publish payments.completed\ncommit offset"]
+    FAIL --> COMMIT[commit offset]
+    DLQ --> COMMIT
+    DLQ2 --> COMMIT
+    DONE --> COMMIT
+
+    style DLQ fill:#9b9b9b,color:#fff
+    style DLQ2 fill:#9b9b9b,color:#fff
+    style FAIL fill:#d0021b,color:#fff
+    style DONE fill:#7ed321,color:#000
+```
+
+### Saga Sequence
+
 ```mermaid
 sequenceDiagram
     participant Client
