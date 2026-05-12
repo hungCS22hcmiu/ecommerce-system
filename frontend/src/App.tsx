@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { queryClient } from '@/lib/queryClient'
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
+import { SellerRoute } from '@/features/seller/SellerRoute'
 import { Navbar } from '@/components/layout/Navbar'
 import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
@@ -16,6 +17,9 @@ import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage'
 import { OrderHistoryPage } from '@/pages/OrderHistoryPage'
 import { OrderDetailPage } from '@/pages/OrderDetailPage'
 import { ProfilePage } from '@/pages/ProfilePage'
+import { SellerDashboardPage } from '@/pages/SellerDashboardPage'
+import { SellerCreateProductPage } from '@/pages/SellerCreateProductPage'
+import { SellerEditProductPage } from '@/pages/SellerEditProductPage'
 import { ToastContainer } from '@/components/ui/Toast'
 
 function Layout() {
@@ -48,6 +52,11 @@ export default function App() {
               <Route path="/orders" element={<OrderHistoryPage />} />
               <Route path="/orders/:id" element={<OrderDetailPage />} />
               <Route path="/profile" element={<ProfilePage />} />
+              <Route element={<SellerRoute />}>
+                <Route path="/seller/products" element={<SellerDashboardPage />} />
+                <Route path="/seller/products/new" element={<SellerCreateProductPage />} />
+                <Route path="/seller/products/:id/edit" element={<SellerEditProductPage />} />
+              </Route>
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

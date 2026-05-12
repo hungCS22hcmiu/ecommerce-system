@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/blacklist"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
 )
 
 // ─── Shared infrastructure (initialised once in TestMain) ─────────────────────
@@ -42,6 +44,11 @@ var (
 	testRDB    *redis.Client
 	testDB     *gorm.DB
 )
+
+// noopEmailSender satisfies email.Sender without sending real emails.
+type noopEmailSender struct{}
+
+func (noopEmailSender) SendVerificationCode(_ context.Context, _, _ string) error { return nil }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -110,7 +117,8 @@ func TestMain(m *testing.M) {
 	bl := blacklist.New(rdb)
 	sc := session.New(rdb)
 	ac := loginattempt.New(rdb)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, privKey, pubKey)
+	vs := verification.New(rdb)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey)
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMw := middleware.Auth(pubKey, bl)
 
@@ -382,4 +390,84 @@ func TestJWTMiddleware_RejectsMissingHeader(t *testing.T) {
 	body := parseBody(t, resp)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, "UNAUTHORIZED", errCode(body))
+}
+
+// TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass proves that SELECT FOR UPDATE
+// serializes concurrent login attempts so no goroutine can read stale attempt counts and
+// bypass account lockout via a lost-update race.
+//
+// Setup: register → 4 sequential wrong attempts (attempts=4 in DB) → release 10 goroutines
+// simultaneously with a start gate. With SELECT FOR UPDATE each goroutine serializes around
+// the row lock: the first writer sets attempts=5 + is_locked=true and commits; all subsequent
+// goroutines see the already-locked row and return ACCOUNT_LOCKED. Without the lock, goroutines
+// reading attempts=4 concurrently would all try to increment to 5, but some writes would be
+// lost, keeping the counter stuck and allowing a successful login.
+func TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass(t *testing.T) {
+	email := uniqueEmail("race")
+	const pw = "Race1234!"
+
+	resp := doPost(t, "/api/v1/auth/register", map[string]any{
+		"email": email, "password": pw,
+		"first_name": "Race", "last_name": "User",
+	}, "")
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	body := parseBody(t, resp)
+	userID := dig(body, "data", "id")
+	t.Cleanup(func() { cleanupUser(email, userID) })
+
+	wrong := map[string]any{"email": email, "password": "WRONGPASS!"}
+
+	// Warm-up: 4 sequential wrong attempts → failed_login_attempts = 4 in DB.
+	for i := 0; i < 4; i++ {
+		r := doPost(t, "/api/v1/auth/login", wrong, "")
+		parseBody(t, r)
+		require.Equal(t, http.StatusUnauthorized, r.StatusCode, "warm-up attempt %d must be 401", i+1)
+	}
+
+	// Release 10 goroutines simultaneously to maximize the SELECT FOR UPDATE race window.
+	const n = 10
+	gate := make(chan struct{})
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			<-gate
+			r := doPost(t, "/api/v1/auth/login", wrong, "")
+			parseBody(t, r) // drain body
+			codes[i] = r.StatusCode
+		}()
+	}
+
+	close(gate)
+	wg.Wait()
+
+	// All responses must be 401 or 403 — zero 200s means no lockout bypass.
+	gotLocked := false
+	for i, code := range codes {
+		assert.True(t, code == http.StatusUnauthorized || code == http.StatusForbidden,
+			"goroutine %d: unexpected status %d (must be 401 or 403)", i, code)
+		if code == http.StatusForbidden {
+			gotLocked = true
+		}
+	}
+	assert.True(t, gotLocked, "at least one goroutine must have received 403 ACCOUNT_LOCKED")
+
+	// DB must reflect a permanently locked account.
+	var isLocked bool
+	var attempts int
+	row := testDB.WithContext(context.Background()).
+		Raw("SELECT is_locked, failed_login_attempts FROM users WHERE email = ?", email).
+		Row()
+	require.NoError(t, row.Scan(&isLocked, &attempts))
+	assert.True(t, isLocked, "DB: is_locked must be true after concurrent race")
+	assert.GreaterOrEqual(t, attempts, 5, "DB: failed_login_attempts must be >= 5")
+
+	// Redis counter must also have reached the threshold.
+	count, err := testRDB.Get(context.Background(), fmt.Sprintf("login_attempts:%s", email)).Int64()
+	require.NoError(t, err, "Redis login_attempts key must exist")
+	assert.GreaterOrEqual(t, count, int64(5), "Redis login_attempts counter must be >= 5")
 }

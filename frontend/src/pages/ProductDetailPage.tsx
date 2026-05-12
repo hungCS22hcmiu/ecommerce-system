@@ -18,6 +18,7 @@ export function ProductDetailPage() {
   const { data, isLoading, isError } = useProduct(Number(id))
   const { addItem } = useCartMutations()
   const [qty, setQty] = useState(1)
+  const [selectedImg, setSelectedImg] = useState(0)
 
   const product = data?.data
 
@@ -42,18 +43,42 @@ export function ProductDetailPage() {
       </Link>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mt-2">
-        {/* Image */}
-        <div className="bg-surface-raised border border-surface-border rounded-lg overflow-hidden aspect-square flex items-center justify-center">
-          {isLoading ? (
-            <Skeleton className="w-full h-full rounded-none" />
-          ) : product?.images?.[0]?.url ? (
-            <img
-              src={product.images[0].url}
-              alt={product.images[0].altText ?? product.name}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <span className="text-fg-subtle text-sm">No image</span>
+        {/* Image gallery */}
+        <div className="flex flex-col gap-3">
+          <div className="bg-surface-raised border border-surface-border rounded-lg overflow-hidden aspect-square flex items-center justify-center">
+            {isLoading ? (
+              <Skeleton className="w-full h-full rounded-none" />
+            ) : product?.images?.[selectedImg]?.url ? (
+              <img
+                src={product.images[selectedImg].url}
+                alt={product.images[selectedImg].altText ?? product.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span className="text-fg-subtle text-sm">No image</span>
+            )}
+          </div>
+          {product && product.images.length > 1 && (
+            <div className="flex gap-2">
+              {product.images.map((img, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setSelectedImg(i)}
+                  className={`w-16 h-16 rounded-md overflow-hidden border-2 transition-colors flex-shrink-0 ${
+                    i === selectedImg
+                      ? 'border-accent'
+                      : 'border-surface-border hover:border-fg-subtle'
+                  }`}
+                >
+                  <img
+                    src={img.url}
+                    alt={img.altText ?? `Image ${i + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 

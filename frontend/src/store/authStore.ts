@@ -6,10 +6,12 @@ interface AuthState {
   refreshToken: string | null
   userId: string | null
   email: string | null
+  role: string | null
   setAuth: (
     tokens: { accessToken: string; refreshToken: string },
     userId: string,
-    email: string
+    email: string,
+    role: string
   ) => void
   setToken: (accessToken: string) => void
   clearAuth: () => void
@@ -22,16 +24,18 @@ export const useAuthStore = create<AuthState>()(
       refreshToken: null,
       userId: null,
       email: null,
-      setAuth: (tokens, userId, email) =>
+      role: null,
+      setAuth: (tokens, userId, email, role) =>
         set({
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken,
           userId,
           email,
+          role,
         }),
       setToken: (accessToken) => set({ accessToken }),
       clearAuth: () =>
-        set({ accessToken: null, refreshToken: null, userId: null, email: null }),
+        set({ accessToken: null, refreshToken: null, userId: null, email: null, role: null }),
     }),
     {
       name: 'auth',
@@ -40,6 +44,7 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: s.refreshToken,
         userId: s.userId,
         email: s.email,
+        role: s.role,
       }),
     }
   )

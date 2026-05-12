@@ -15,7 +15,6 @@ import java.util.UUID;
 @AllArgsConstructor
 public class CreateOrderRequest {
 
-    @NotNull
     private UUID cartId;
 
     @NotEmpty

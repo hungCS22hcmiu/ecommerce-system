@@ -67,9 +67,32 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Cacheable(value = "product", key = "#id")
     public ProductResponse getProduct(Long id) {
+        return getProduct(id, null);
+    }
+
+    @Override
+    @Cacheable(value = "product", key = "#id", condition = "#sellerId == null")
+    public ProductResponse getProduct(Long id, UUID sellerId) {
+        if (sellerId != null) {
+            // Seller fetch: return the product regardless of status if they own it
+            Product product = productRepository.findById(id)
+                    .orElseThrow(() -> new ProductNotFoundException(id));
+            if (product.getSellerId().equals(sellerId)) {
+                return toProductResponse(product);
+            }
+        }
+        // Public fetch: only return ACTIVE products
         Product product = productRepository.findByIdAndStatus(id, ProductStatus.ACTIVE)
                 .orElseThrow(() -> new ProductNotFoundException(id));
         return toProductResponse(product);
+    }
+
+    @Override
+    public Page<ProductSummaryResponse> listProductsBySeller(UUID sellerId, ProductStatus status, Pageable pageable) {
+        if (status != null) {
+            return productRepository.findBySellerIdAndStatus(sellerId, status, pageable).map(this::toSummaryResponse);
+        }
+        return productRepository.findBySellerId(sellerId, pageable).map(this::toSummaryResponse);
     }
 
     @Override

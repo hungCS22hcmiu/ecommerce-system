@@ -17,4 +17,7 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
 
     // Direct children of a parent
     List<Category> findByParentIdOrderBySortOrderAsc(Long parentId);
+
+    // Search by name (case-insensitive)
+    List<Category> findByNameContainingIgnoreCaseOrderBySortOrderAsc(String name);
 }

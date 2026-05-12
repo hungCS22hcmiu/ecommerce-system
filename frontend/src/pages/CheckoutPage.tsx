@@ -63,9 +63,7 @@ export function CheckoutPage() {
     e.preventDefault()
     if (!items.length) return
 
-    const cartId = crypto.randomUUID()
     const result = await createOrder.mutateAsync({
-      cartId,
       items: items.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
       shippingAddress: address,
     })

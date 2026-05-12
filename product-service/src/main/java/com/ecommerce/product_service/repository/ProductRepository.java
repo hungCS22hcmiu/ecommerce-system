@@ -24,6 +24,9 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     // Products by category
     Page<Product> findByCategoryIdAndStatus(Long categoryId, ProductStatus status, Pageable pageable);
 
+    // Seller's own products filtered by status
+    Page<Product> findBySellerIdAndStatus(UUID sellerId, ProductStatus status, Pageable pageable);
+
     // Ownership check before update/delete
     boolean existsByIdAndSellerId(Long id, UUID sellerId);
 

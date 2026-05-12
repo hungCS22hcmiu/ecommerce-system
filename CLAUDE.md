@@ -13,6 +13,7 @@ Distributed e-commerce platform — 5 microservices. Go for I/O-heavy concurrent
 | cart-service | Go (Gin + GORM) | 8002 | **Implemented** | Redis-first, WATCH/MULTI/EXEC |
 | order-service | Java/Spring Boot | 8082 | **Implemented** | Pessimistic lock on state transitions |
 | payment-service | Go (Gin) | 8003 | **Implemented** | Idempotency key + DB UNIQUE + Kafka saga |
+| frontend | React 19 + Vite → Nginx | 3001 | **Implemented** | TanStack Query, Zustand, JWT interceptor |
 | nginx | nginx:alpine | 80 | **Active** | Reverse proxy, rate limiting, CORS |
 
 ## Infrastructure Commands
@@ -111,7 +112,7 @@ All external traffic enters through port 80. Services are NOT directly exposed i
 
 **Security headers:** `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`
 
-**CORS:** `Access-Control-Allow-Origin: http://localhost:3000` (React frontend dev server)
+**CORS:** `Access-Control-Allow-Origin: http://localhost:3001` (React frontend on port 3001)
 
 **Scripts (all default to Nginx port 80):**
 - `bash script/e2e-test.sh` — Browse → Cart → Order (14 assertions); override: `USER_SVC=http://localhost:8001`
@@ -126,21 +127,26 @@ All external traffic enters through port 80. Services are NOT directly exposed i
 **Endpoints:**
 ```
 GET  /health/live
-POST /api/v1/products                     # seller only (X-Seller-Id header)
-GET  /api/v1/products/{id}                # public; cached 30 min
-GET  /api/v1/products?categoryId=&status= # public; paginated; cached 3 min
-GET  /api/v1/products/search?q=           # public; full-text; cached 3 min
-PUT  /api/v1/products/{id}                # seller only; ownership → 403
-DELETE /api/v1/products/{id}              # seller only; soft delete → DELETED
+POST /api/v1/products                              # seller only (X-Seller-Id header)
+GET  /api/v1/products/{id}                         # public (ACTIVE); seller with X-Seller-Id bypasses status filter
+GET  /api/v1/products?categoryId=&status=          # public; paginated; cached 3 min
+GET  /api/v1/products?sellerId=<UUID>&status=      # seller filter — returns own products (all statuses)
+GET  /api/v1/products/search?q=                    # public; full-text; cached 3 min
+PUT  /api/v1/products/{id}                         # seller only; ownership → 403
+DELETE /api/v1/products/{id}                       # seller only; soft delete → DELETED
+GET  /api/v1/categories?q=                         # public; list all categories (filter by name if q provided)
+POST /api/v1/categories                            # create category; auto-generates slug (uniqueness-safe)
 ```
 
 **Auth:** No JWT yet. Gateway forwards `X-Seller-Id: <UUID>`; missing header → 400.
 
 **Key classes:**
-- `ProductServiceImpl` — business logic, `@Version` optimistic lock, cache annotations
+- `ProductServiceImpl` — business logic, `@Version` optimistic lock, cache annotations; `getProduct(Long id, UUID sellerId)` overload bypasses ACTIVE filter for owner
+- `CategoryServiceImpl` — `listCategories(q)`, `createCategory(req)`; `uniqueSlug()` generates kebab-case slug with collision avoidance
+- `CategoryController` — `GET /categories?q=`, `POST /categories` (201)
 - `RedisConfig` — `RedisCacheManager`, Jackson JSON serializer, TTLs: product=30min / productList=3min / default=10min, prefix `product-service::`
 - `CacheWarmupService` — async warmup on startup, loads top 100 active products
-- `ProductController` — REST layer, `@PageableDefault(size=20, sort=createdAt DESC)`
+- `ProductController` — REST layer, `@PageableDefault(size=20, sort=createdAt DESC)`; optional `sellerId` query param routes to seller-specific list
 - `GlobalExceptionHandler` — maps domain exceptions to envelope errors
 
 **Cache strategy (Cache-Aside):**
@@ -215,6 +221,50 @@ GET  /health/ready                      # checks postgres + kafka
 - `internal/service/payment_service_test.go` — 6 unit tests (mock repo + gateway)
 - `internal/integration/payment_idempotency_test.go` — concurrent idempotency proof (10 goroutines, 1 winner)
 - `internal/integration/payment_kafka_test.go` — 4 Kafka resilience tests (testcontainers): poison DLQ, retry exhaustion DLQ, permanent decline no-DLQ, duplicate delivery idempotency
+
+---
+
+## frontend (Implemented)
+
+React 19 + TypeScript SPA. Served via Nginx on port 3001. Docker multi-stage build (`node:22-alpine` → `nginx:alpine`).
+
+**Stack:** React 19 · TypeScript · Vite 8 · TanStack Query 5 · Zustand 5 · Axios · React Router 6 · Tailwind CSS 4
+
+```bash
+cd frontend
+npm run dev        # dev server on :5173 (proxies /api → localhost:80)
+npm run build      # production build (tsc + vite)
+docker compose build frontend && docker compose up -d frontend
+```
+
+**Key patterns:**
+- `lib/axios.ts` — queue-based 401 interceptor: `isRefreshing` flag + `failedQueue[]` holds concurrent requests during token refresh; replays all on success
+- `store/authStore.ts` — `accessToken` in memory (XSS-safe), `refreshToken` in localStorage, `userId`, `email`, `role` (persisted via Zustand `persist`)
+- `features/*/use*.ts` — TanStack Query hooks; optimistic cart mutations with snapshot rollback
+- `features/payment/usePaymentStatus.ts` — `refetchInterval` as function; returns `false` on terminal status (CONFIRMED/PAYMENT_FAILED/CANCELLED) to self-stop polling
+
+**Routes:**
+```
+/                         → HomePage (featured products)
+/login · /register        → Auth pages
+/verify-email             → Email verification
+/products                 → ProductListPage (search + pagination + URL state)
+/products/:id             → ProductDetailPage (multi-image gallery)
+/cart                     → CartPage
+/checkout                 → CheckoutPage (address selector)
+/orders/:id/confirmation  → OrderConfirmationPage (payment polling)
+/orders · /orders/:id     → OrderHistoryPage / OrderDetailPage (timeline + cancel)
+/profile                  → ProfilePage (profile edit + address CRUD)
+/seller/products          → SellerDashboardPage (role=seller only)
+/seller/products/new      → SellerCreateProductPage
+/seller/products/:id/edit → SellerEditProductPage
+```
+
+**Seller features** (beyond plan):
+- `SellerRoute` — role guard: redirects non-sellers to `/`
+- `ProductForm` — shared create/edit form with `CategoryCombobox` (search + inline create)
+- `sellerApi.ts` — injects `X-Seller-Id` header per-request; `?sellerId=` filter for own-product listing
+- `authStore.role` — stored from login response; drives "My Products" Navbar link visibility
 
 **Scripts:** see Nginx section above — all scripts default to `http://localhost` (port 80).
 
