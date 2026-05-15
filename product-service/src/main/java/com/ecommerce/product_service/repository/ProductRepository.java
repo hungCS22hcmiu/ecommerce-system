@@ -49,4 +49,18 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
             """,
             nativeQuery = true)
     Page<Product> searchActive(@Param("query") String query, Pageable pageable);
+
+    // Returns [id (Long), score (Double)] pairs ordered by cosine similarity descending.
+    // Uses id + score only to avoid mapping the unmapped vector(384) column.
+    // Caller must SET LOCAL ivfflat.probes before this query (pgvector reads the
+    // setting at access-method init, so a CTE or WHERE trick won't work).
+    @Query(value = """
+            SELECT id, (1 - (embedding <=> CAST(:queryVec AS vector))) AS score
+            FROM products
+            WHERE status = 'ACTIVE' AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:queryVec AS vector)
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findIdsBySemanticSimilarity(@Param("queryVec") String queryVec,
+                                               @Param("limit") int limit);
 }

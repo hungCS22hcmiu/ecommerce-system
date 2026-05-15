@@ -56,10 +56,12 @@ class ProductCacheIntegrationTest {
 
     @Container
     @SuppressWarnings("resource")
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(
+            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres"))
             .withDatabaseName("ecommerce_products")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withInitScript("test-pgvector-init.sql");
 
     @Container
     @SuppressWarnings({"resource", "rawtypes"})

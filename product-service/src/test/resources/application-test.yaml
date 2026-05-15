@@ -1,3 +1,8 @@
+ai-service:
+  url: http://localhost:9000
+  timeout-ms: 2000
+  write-through-enabled: false
+
 spring:
   cache:
     # Use in-memory cache for tests — avoids Redis dependency while still exercising

@@ -1,5 +1,6 @@
 package com.ecommerce.product_service.config;
 
+import com.ecommerce.product_service.dto.AISearchResponse;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -43,6 +44,9 @@ public class RedisConfig {
                 ObjectMapper.DefaultTyping.NON_FINAL,
                 JsonTypeInfo.As.PROPERTY
         );
+        // Records are implicitly final, so NON_FINAL skips them — add @class explicitly
+        // via a mixin so the Redis serializer can round-trip AISearchResponse.
+        mapper.addMixIn(AISearchResponse.class, AISearchResponseTypeMixin.class);
         // Jackson 2.19 can't instantiate PageImpl (no no-arg constructor) or
         // Collections$UnmodifiableRandomAccessList (private inner class). Register
         // a custom deserializer that reads the cached JSON and reconstructs PageImpl
@@ -52,6 +56,9 @@ public class RedisConfig {
         mapper.registerModule(pageModule);
         return mapper;
     }
+
+    @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS, include = JsonTypeInfo.As.PROPERTY, property = "@class")
+    abstract static class AISearchResponseTypeMixin {}
 
     // Reads the type-wrapped array format produced by DefaultTyping.NON_FINAL:
     //   content: ["java.util.Collections$UnmodifiableRandomAccessList", [{...}, ...]]
@@ -125,7 +132,8 @@ public class RedisConfig {
 
         Map<String, RedisCacheConfiguration> cacheConfigs = Map.of(
                 "product",     baseCacheConfig(redisObjectMapper).entryTtl(Duration.ofMinutes(30)),
-                "productList", baseCacheConfig(redisObjectMapper).entryTtl(Duration.ofMinutes(3))
+                "productList", baseCacheConfig(redisObjectMapper).entryTtl(Duration.ofMinutes(3)),
+                "aiSearch",    baseCacheConfig(redisObjectMapper).entryTtl(Duration.ofMinutes(15))
         );
 
         return RedisCacheManager.builder(connectionFactory)

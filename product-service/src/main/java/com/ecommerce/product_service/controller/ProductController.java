@@ -6,6 +6,8 @@ import com.ecommerce.product_service.dto.ProductResponse;
 import com.ecommerce.product_service.dto.ProductSummaryResponse;
 import com.ecommerce.product_service.dto.UpdateProductRequest;
 import com.ecommerce.product_service.model.ProductStatus;
+import com.ecommerce.product_service.dto.AISearchResponse;
+import com.ecommerce.product_service.service.AISearchService;
 import com.ecommerce.product_service.service.ProductService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,7 @@ import java.util.UUID;
 public class ProductController {
 
     private final ProductService productService;
+    private final AISearchService aiSearchService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -60,6 +63,14 @@ public class ProductController {
             return ApiResponse.ok(productService.listProductsBySeller(sellerId, status, pageable));
         }
         return ApiResponse.ok(productService.listProducts(categoryId, status, pageable));
+    }
+
+    @GetMapping("/ai-search")
+    public ApiResponse<AISearchResponse> aiSearch(
+            @RequestParam String q,
+            @RequestParam(defaultValue = "10") int limit) {
+        int clampedLimit = Math.min(Math.max(limit, 1), 50);
+        return ApiResponse.ok(aiSearchService.search(q, clampedLimit));
     }
 
     @GetMapping("/search")

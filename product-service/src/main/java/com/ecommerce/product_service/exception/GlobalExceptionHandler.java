@@ -1,8 +1,17 @@
 package com.ecommerce.product_service.exception;
 
+import com.ecommerce.product_service.dto.AISearchResponse;
 import com.ecommerce.product_service.dto.ApiResponse;
+import com.ecommerce.product_service.dto.ProductSummaryResponse;
+import com.ecommerce.product_service.service.ProductService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -15,7 +24,19 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class GlobalExceptionHandler {
+
+    private final ProductService productService;
+
+    @ExceptionHandler(AIServiceException.class)
+    public ResponseEntity<ApiResponse<AISearchResponse>> handleAIService(AIServiceException ex) {
+        log.warn("AI search fallback triggered for query='{}': {}", ex.getQuery(), ex.getMessage());
+        Pageable pageable = PageRequest.of(0, ex.getLimit(), Sort.by("created_at").descending());
+        Page<ProductSummaryResponse> page = productService.searchProducts(ex.getQuery(), pageable);
+        AISearchResponse fallback = new AISearchResponse(ex.getQuery(), page.getContent(), null, "fallback-keyword");
+        return ResponseEntity.ok(ApiResponse.ok(fallback));
+    }
 
     @ExceptionHandler(ProductNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)

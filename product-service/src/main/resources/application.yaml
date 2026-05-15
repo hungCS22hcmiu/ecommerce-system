@@ -42,6 +42,11 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
 
+ai-service:
+  url: ${AI_SERVICE_URL:http://localhost:9000}
+  timeout-ms: ${AI_SERVICE_TIMEOUT_MS:2000}
+  write-through-enabled: true
+
 server:
   port: 8081
 
