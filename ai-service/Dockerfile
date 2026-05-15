@@ -3,6 +3,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY requirements.txt .
+
+# Install CPU-only torch first — prevents sentence-transformers from pulling the
+# full CUDA build (~2.5 GB) when it resolves the torch dependency
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download model into this image layer — avoids ~90 MB download on every cold start
