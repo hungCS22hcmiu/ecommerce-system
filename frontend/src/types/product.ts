@@ -40,3 +40,10 @@ export interface ProductListParams {
   categoryId?: number
   status?: string
 }
+
+export interface AISearchResponse {
+  query: string
+  results: Product[]
+  scores: number[] | null
+  mode: 'ai' | 'fallback-keyword'
+}

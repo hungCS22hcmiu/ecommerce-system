@@ -400,6 +400,42 @@ components:
           description: Must equal `orderId.toString()` when used in the saga path
           example: 550e8400-e29b-41d4-a716-446655440000
 
+    # ── AI Search ────────────────────────────────
+    ProductSummary:
+      type: object
+      properties:
+        id:           { type: integer }
+        name:         { type: string }
+        price:        { type: number }
+        categoryId:   { type: integer }
+        categoryName: { type: string }
+        sellerId:     { type: string, format: uuid }
+        status:       { type: string, enum: [ACTIVE, INACTIVE, DELETED] }
+        stockAvailable: { type: integer }
+        thumbnailUrl: { type: string, nullable: true }
+        createdAt:    { type: string, format: date-time }
+
+    AISearchResponse:
+      type: object
+      required: [query, results, mode]
+      properties:
+        query:
+          type: string
+          description: The original search query
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductSummary'
+        scores:
+          type: array
+          items: { type: number }
+          nullable: true
+          description: Cosine similarity scores (null when mode is fallback-keyword)
+        mode:
+          type: string
+          enum: [ai, fallback-keyword]
+          description: ai = semantic search succeeded; fallback-keyword = ai-service was unavailable
+
   # ─── Reusable Responses ───────────────────────
   responses:
     Unauthorized:
@@ -472,6 +508,57 @@ tags:
       The `POST /payments` endpoint allows direct invocation for smoke tests and manual replay.
 
 paths:
+
+  # ════════════════════════════════════════════
+  # PRODUCT ENDPOINTS
+  # ════════════════════════════════════════════
+
+  /products/ai-search:
+    get:
+      tags: [Products]
+      summary: Semantic AI product search
+      description: |
+        Embeds the query via the Python ai-service, runs a pgvector cosine
+        similarity search over active products, and returns ranked results.
+        When ai-service is unavailable the endpoint automatically falls back
+        to the existing Postgres full-text search and returns `mode: fallback-keyword`.
+        Results are cached in Redis for 15 minutes.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query (minimum 2 characters)
+          schema:
+            type: string
+            minLength: 2
+            example: comfortable running shoes
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results (1–50)
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: AI results (mode=ai) or keyword fallback (mode=fallback-keyword)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AISearchResponse'
+        "400":
+          description: Query is missing or shorter than 2 characters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ════════════════════════════════════════════
   # AUTH ENDPOINTS

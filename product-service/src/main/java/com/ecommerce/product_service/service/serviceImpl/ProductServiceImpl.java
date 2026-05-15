@@ -14,6 +14,7 @@ import com.ecommerce.product_service.model.ProductImage;
 import com.ecommerce.product_service.model.ProductStatus;
 import com.ecommerce.product_service.repository.CategoryRepository;
 import com.ecommerce.product_service.repository.ProductRepository;
+import com.ecommerce.product_service.service.ProductEmbeddingService;
 import com.ecommerce.product_service.service.ProductService;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class ProductServiceImpl implements ProductService {
 
     private final ProductRepository productRepository;
     private final CategoryRepository categoryRepository;
+    private final ProductEmbeddingService productEmbeddingService;
 
     @Override
     @Transactional
@@ -61,7 +63,14 @@ public class ProductServiceImpl implements ProductService {
             request.getImages().forEach(img -> product.getImages().add(toImageEntity(img, product)));
         }
 
-        return toProductResponse(productRepository.save(product));
+        Product saved = productRepository.save(product);
+        productEmbeddingService.scheduleEmbedding(
+                saved.getId(),
+                saved.getName(),
+                saved.getDescription(),
+                saved.getCategory() != null ? saved.getCategory().getName() : null
+        );
+        return toProductResponse(saved);
     }
 
     @Override
@@ -148,6 +157,18 @@ public class ProductServiceImpl implements ProductService {
         if (request.getImages() != null) {
             product.getImages().clear();
             request.getImages().forEach(img -> product.getImages().add(toImageEntity(img, product)));
+        }
+
+        boolean semanticChange = request.getName() != null
+                || request.getDescription() != null
+                || request.getCategoryId() != null;
+        if (semanticChange) {
+            productEmbeddingService.scheduleEmbedding(
+                    product.getId(),
+                    product.getName(),
+                    product.getDescription(),
+                    product.getCategory() != null ? product.getCategory().getName() : null
+            );
         }
 
         return toProductResponse(product);
