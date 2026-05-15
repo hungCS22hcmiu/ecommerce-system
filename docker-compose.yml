@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: ecommerce-postgres
     ports:
       - "5432:5432"
