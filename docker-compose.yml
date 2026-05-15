@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: ecommerce-postgres
     ports:
       - "5432:5432"
@@ -198,14 +198,42 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      AI_SERVICE_URL: http://ai-service:9000
       ENV: ${ENV:-development}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ai-service:
+        condition: service_healthy
     networks:
       - backend
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: ecommerce-ai-service
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ecommerce_products
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/health/ready')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    # No published port — internal-only, accessed as http://ai-service:9000
 
   order-service:
     build:

@@ -4,9 +4,11 @@ import { Input } from '@/components/ui/input'
 interface SearchBarProps {
   onSearch: (q: string) => void
   defaultValue?: string
+  mode?: 'keyword' | 'ai'
+  onModeChange?: (m: 'keyword' | 'ai') => void
 }
 
-export function SearchBar({ onSearch, defaultValue = '' }: SearchBarProps) {
+export function SearchBar({ onSearch, defaultValue = '', mode = 'keyword', onModeChange }: SearchBarProps) {
   const [value, setValue] = useState(defaultValue)
   const stable = useCallback(onSearch, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -21,11 +23,38 @@ export function SearchBar({ onSearch, defaultValue = '' }: SearchBarProps) {
   }, [defaultValue])
 
   return (
-    <Input
-      placeholder="Search products…"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      className="w-full text-base h-11"
-    />
+    <div className="flex flex-col gap-2">
+      <Input
+        placeholder="Search products…"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-full text-base h-11"
+      />
+      {value.trim().length >= 2 && (
+        <div className="flex items-center gap-1 text-sm">
+          <button
+            onClick={() => onModeChange?.('keyword')}
+            className={
+              mode !== 'ai'
+                ? 'font-semibold text-fg-base'
+                : 'text-fg-subtle hover:text-fg-base transition-colors'
+            }
+          >
+            Keyword
+          </button>
+          <span className="text-fg-subtle">|</span>
+          <button
+            onClick={() => onModeChange?.('ai')}
+            className={
+              mode === 'ai'
+                ? 'font-semibold text-fg-base'
+                : 'text-fg-subtle hover:text-fg-base transition-colors'
+            }
+          >
+            ✨ Smart Search
+          </button>
+        </div>
+      )}
+    </div>
   )
 }

@@ -1,6 +1,6 @@
 import { api } from '@/lib/axios'
 import type { ApiResponse } from '@/types/api'
-import type { Product, ProductDetail, StockLevel, ProductListParams } from '@/types/product'
+import type { Product, ProductDetail, StockLevel, ProductListParams, AISearchResponse } from '@/types/product'
 
 export const productApi = {
   list: (params: ProductListParams = {}) =>
@@ -16,4 +16,9 @@ export const productApi = {
 
   getStock: (id: number) =>
     api.get<ApiResponse<StockLevel>>(`/inventory/${id}`).then((r) => r.data),
+
+  aiSearch: (q: string, limit = 20) =>
+    api
+      .get<ApiResponse<AISearchResponse>>('/products/ai-search', { params: { q, limit } })
+      .then((r) => r.data),
 }

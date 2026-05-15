@@ -4,17 +4,18 @@
 This is a high-throughput microservices-based e-commerce platform designed with a focus on concurrency, resilience, and scalability. It employs a polyglot architecture, using Go for I/O-intensive services and Java (Spring Boot) for complex business logic, all coordinated via synchronous REST APIs and asynchronous Kafka events (Choreography Saga pattern).
 
 ### Core Architecture
-- **User Service (Go 1.25.3):** Handles authentication, profiles, and addresses using Gin and GORM.
-- **Product Service (Java 21):** Manages the product catalog, search, and inventory using Spring Boot 3.5.11.
-- **Cart Service (Go 1.25.3):** Manages shopping carts with Redis as the primary store.
-- **Order Service (Java 21):** Orchestrates the order lifecycle and state machine transitions using Spring Boot 3.5.11 and Kafka.
-- **Payment Service (Go 1.25.3):** Processes payments and integrates with Kafka for the Saga pattern.
-- **AI Service (Python):** (Planned/Architectural Design) Provides vector embeddings for product search.
+- **Frontend (React 19/TypeScript):** Single Page Application using Vite, React Query, Zustand, and Tailwind CSS.
+- **User Service (Go 1.25):** Handles authentication, profiles, and addresses using Gin and GORM.
+- **Product Service (Java 21):** Manages the product catalog, search, and inventory using Spring Boot 3.5.
+- **Cart Service (Go 1.25):** Manages shopping carts with Redis as the primary store.
+- **Order Service (Java 21):** Orchestrates the order lifecycle and state machine transitions.
+- **Payment Service (Go 1.25):** Processes payments and integrates with external gateways via Kafka.
+- **AI Service (Python sidecar):** Provides vector embeddings for product search.
 - **Nginx:** Acts as the entry point for all client traffic, handling routing, rate limiting, and TLS.
 
 ### Tech Stack
 - **Databases:** PostgreSQL 15 (5 logical databases), Redis 7 (caching/sessions).
-- **Messaging:** Apache Kafka 3.x (Saga orchestration) with Zookeeper 7.5.
+- **Messaging:** Apache Kafka 3.x (Saga orchestration).
 - **Communication:** REST (JSON) via Nginx; Kafka for async flows.
 - **Security:** RS256 JWT (15-min access, 7-day refresh), bcrypt hashing.
 
@@ -24,6 +25,7 @@ This is a high-throughput microservices-based e-commerce platform designed with 
 
 ### Prerequisites
 - Docker & Docker Compose 2.x
+- Node.js (for frontend development)
 - Go 1.25+
 - Java 21 LTS
 
@@ -36,6 +38,7 @@ This is a high-throughput microservices-based e-commerce platform designed with 
 - **Seed Data:** `make db-seed` (inserts sample users)
 
 ### Local Development (Outside Docker)
+- **Frontend:** `cd frontend && npm run dev`
 - **Go Services:** `cd <service> && go run ./cmd/server/main.go`
 - **Java Services:** `cd <service> && ./mvnw spring-boot:run`
 
@@ -43,6 +46,8 @@ This is a high-throughput microservices-based e-commerce platform designed with 
 - **Go Unit Tests:** `make test-user` (runs with race detector)
 - **Go Integration:** `make test-integration-user` (requires infra-up)
 - **Java Tests:** `./mvnw test`
+- **End-to-End Tests:** Bash scripts (`script/e2e-test.sh`, `script/e2e-payment.sh`)
+- **Load Testing:** k6 scripts (`script/k6/`)
 
 ---
 
@@ -62,6 +67,10 @@ This is a high-throughput microservices-based e-commerce platform designed with 
   - Constructor injection is required for Spring beans.
   - `@Transactional` at the service layer.
   - Flyway for versioned database migrations.
+- **Frontend:**
+  - TypeScript for strict typing.
+  - Tailwind CSS for styling.
+  - Zustand for state management.
 
 ### Logging & Observability
 - **Structured Logging:** All services emit JSON logs.

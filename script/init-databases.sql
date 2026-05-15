@@ -20,6 +20,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 \c ecommerce_products
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
 
 \c ecommerce_carts
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

@@ -19,6 +19,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -43,10 +44,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class InventoryConcurrencyTest {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>(
+            DockerImageName.parse("pgvector/pgvector:pg16").asCompatibleSubstituteFor("postgres"))
             .withDatabaseName("ecommerce_products")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withInitScript("test-pgvector-init.sql");
 
     @DynamicPropertySource
     static void configureDataSource(DynamicPropertyRegistry registry) {
