@@ -30,6 +30,8 @@ type UserRepository interface {
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName, phone string) error
 	// UpdateVerificationStatus sets is_verified and verified_at on the users row.
 	UpdateVerificationStatus(ctx context.Context, userID uuid.UUID, verified bool) error
+	// UpdatePassword replaces the bcrypt password_hash for a user.
+	UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string) error
 }
 
 type userRepository struct {
@@ -108,6 +110,12 @@ func (r *userRepository) UpdateProfile(ctx context.Context, userID uuid.UUID, fi
 			"last_name":  lastName,
 			"phone":      phone,
 		}).Error
+}
+
+func (r *userRepository) UpdatePassword(ctx context.Context, userID uuid.UUID, passwordHash string) error {
+	return r.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", userID).
+		Update("password_hash", passwordHash).Error
 }
 
 func (r *userRepository) UpdateVerificationStatus(ctx context.Context, userID uuid.UUID, verified bool) error {

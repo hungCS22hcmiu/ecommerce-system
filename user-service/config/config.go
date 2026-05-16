@@ -33,7 +33,8 @@ type Config struct {
 	SMTPFrom     string
 
 	// App
-	Env string
+	Env    string
+	AppURL string
 }
 
 func Load() *Config {
@@ -55,6 +56,7 @@ func Load() *Config {
 		SMTPPassword:      getEnv("SMTP_PASSWORD", ""),
 		SMTPFrom:          getEnv("SMTP_FROM", "noreply@example.com"),
 		Env:               getEnv("ENV", "development"),
+		AppURL:            getEnv("APP_URL", "http://localhost:3001"),
 	}
 }
 

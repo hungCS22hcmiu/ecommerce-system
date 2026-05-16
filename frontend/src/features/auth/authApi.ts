@@ -22,6 +22,12 @@ export const authApi = {
   resendVerification: (body: { email: string }) =>
     api.post('/auth/resend-verification', body).then((r) => r.data),
 
+  forgotPassword: (body: { email: string }) =>
+    api.post('/auth/forgot-password', body).then((r) => r.data),
+
+  resetPassword: (body: { email: string; token: string; password: string }) =>
+    api.post('/auth/reset-password', body).then((r) => r.data),
+
   getProfile: () =>
     api.get<ApiResponse<UserProfile>>('/users/profile').then((r) => r.data),
 }

@@ -68,6 +68,16 @@ func (m *mockAuthService) ResendVerification(ctx context.Context, req dto.Resend
 	return args.Error(0)
 }
 
+func (m *mockAuthService) ForgotPassword(ctx context.Context, req dto.ForgotPasswordRequest) error {
+	args := m.Called(ctx, req)
+	return args.Error(0)
+}
+
+func (m *mockAuthService) ResetPassword(ctx context.Context, req dto.ResetPasswordRequest) error {
+	args := m.Called(ctx, req)
+	return args.Error(0)
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 func newRouter(svc service.AuthService) *gin.Engine {

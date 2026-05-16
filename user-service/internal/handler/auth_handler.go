@@ -184,6 +184,71 @@ func (h *AuthHandler) VerifyEmail(c *gin.Context) {
 	response.Success(c, gin.H{"message": "email verified"})
 }
 
+// ForgotPassword handles POST /api/v1/auth/forgot-password
+func (h *AuthHandler) ForgotPassword(c *gin.Context) {
+	var req dto.ForgotPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
+
+	if err := validate.Struct(req); err != nil {
+		var ve validator.ValidationErrors
+		errors.As(err, &ve)
+		fields := make(map[string]string, len(ve))
+		for _, fe := range ve {
+			fields[fe.Field()] = fe.Tag()
+		}
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "validation failed", fields)
+		return
+	}
+
+	if err := h.authService.ForgotPassword(c.Request.Context(), req); err != nil {
+		if errors.Is(err, service.ErrResetCooldown) {
+			response.TooManyRequests(c)
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+
+	response.Success(c, gin.H{"message": "if that email is registered, a reset link has been sent"})
+}
+
+// ResetPassword handles POST /api/v1/auth/reset-password
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req dto.ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
+
+	if err := validate.Struct(req); err != nil {
+		var ve validator.ValidationErrors
+		errors.As(err, &ve)
+		fields := make(map[string]string, len(ve))
+		for _, fe := range ve {
+			fields[fe.Field()] = fe.Tag()
+		}
+		response.Error(c, http.StatusBadRequest, "VALIDATION_ERROR", "validation failed", fields)
+		return
+	}
+
+	if err := h.authService.ResetPassword(c.Request.Context(), req); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidCode):
+			response.BadRequest(c, "INVALID_RESET_TOKEN", "reset token is invalid or expired", nil)
+		case errors.Is(err, service.ErrTooManyResetAttempts):
+			response.TooManyRequests(c)
+		default:
+			response.InternalError(c)
+		}
+		return
+	}
+
+	response.Success(c, gin.H{"message": "password has been reset"})
+}
+
 // ResendVerification handles POST /api/v1/auth/resend-verification
 func (h *AuthHandler) ResendVerification(c *gin.Context) {
 	var req dto.ResendVerificationRequest
