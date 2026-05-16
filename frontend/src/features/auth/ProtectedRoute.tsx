@@ -13,11 +13,22 @@ export function ProtectedRoute() {
 
   useEffect(() => {
     if (!token && refreshToken) {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
       api
-        .post('/auth/refresh', { refresh_token: refreshToken })
+        .post('/auth/refresh', { refresh_token: refreshToken }, { signal: controller.signal })
         .then(({ data }) => setToken(data.data.access_token))
         .catch(() => clearAuth())
-        .finally(() => setChecking(false))
+        .finally(() => {
+          clearTimeout(timeoutId)
+          setChecking(false)
+        })
+
+      return () => {
+        controller.abort()
+        clearTimeout(timeoutId)
+      }
     } else {
       setChecking(false)
     }
