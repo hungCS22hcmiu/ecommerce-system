@@ -3,6 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import { queryClient } from '@/lib/queryClient'
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
+import { AuthInitializer } from '@/features/auth/AuthInitializer'
 import { SellerRoute } from '@/features/seller/SellerRoute'
 import { Navbar } from '@/components/layout/Navbar'
 import { LoginPage } from '@/pages/LoginPage'
@@ -38,6 +39,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <QueryClientProvider client={queryClient}>
+        <AuthInitializer />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
