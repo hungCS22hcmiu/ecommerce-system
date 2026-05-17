@@ -9,9 +9,10 @@ import { formatCurrency } from '@/lib/utils'
 import { showToast } from '@/lib/toast'
 
 function StockBadge({ stock }: { stock: number }) {
-  if (stock === 0) return <Badge variant="red">Out of Stock</Badge>
-  if (stock <= 5) return <Badge variant="amber">Only {stock} left</Badge>
-  return <Badge variant="emerald">{stock} available</Badge>
+  const safe = Math.max(0, stock)
+  if (safe === 0) return <Badge variant="red">Out of Stock</Badge>
+  if (safe <= 5) return <Badge variant="amber">Only {safe} left</Badge>
+  return <Badge variant="emerald">{safe} available</Badge>
 }
 
 export function ProductDetailPage() {
@@ -120,6 +121,11 @@ export function ProductDetailPage() {
                   <span className="text-xs text-fg-subtle font-mono">
                     {product.categoryName}
                   </span>
+                  {product.stockReserved > 0 && (
+                    <span className="text-xs text-fg-subtle font-mono">
+                      {product.stockReserved} sold
+                    </span>
+                  )}
                 </div>
 
                 {/* Qty selector */}

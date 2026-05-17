@@ -148,7 +148,14 @@ public class ProductServiceImpl implements ProductService {
         if (request.getDescription() != null) product.setDescription(request.getDescription());
         if (request.getPrice() != null) product.setPrice(request.getPrice());
         if (request.getStatus() != null) product.setStatus(request.getStatus());
-        if (request.getStockQuantity() != null) product.setStockQuantity(request.getStockQuantity());
+        if (request.getStockQuantity() != null) {
+            if (request.getStockQuantity() < product.getStockReserved()) {
+                throw new IllegalArgumentException(
+                    "Cannot set stock to " + request.getStockQuantity()
+                    + "; " + product.getStockReserved() + " unit(s) are currently reserved");
+            }
+            product.setStockQuantity(request.getStockQuantity());
+        }
 
         if (request.getCategoryId() != null) {
             product.setCategory(resolveCategory(request.getCategoryId()));
@@ -224,6 +231,7 @@ public class ProductServiceImpl implements ProductService {
                 .sellerId(p.getSellerId())
                 .status(p.getStatus())
                 .stockAvailable(p.getStockQuantity() - p.getStockReserved())
+                .stockReserved(p.getStockReserved())
                 .thumbnailUrl(thumbnail)
                 .createdAt(p.getCreatedAt())
                 .build();

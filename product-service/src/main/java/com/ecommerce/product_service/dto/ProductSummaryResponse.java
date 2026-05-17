@@ -27,6 +27,7 @@ public class ProductSummaryResponse {
     private ProductStatus status;
 
     private int stockAvailable;
+    private int stockReserved;
     private String thumbnailUrl;
 
     private OffsetDateTime createdAt;

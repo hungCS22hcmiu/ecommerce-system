@@ -7,6 +7,7 @@ export interface Product {
   sellerId: string
   status: 'ACTIVE' | 'INACTIVE' | 'DELETED'
   stockAvailable: number
+  stockReserved: number
   thumbnailUrl?: string
   createdAt: string
 }
@@ -21,7 +22,6 @@ export interface ProductImage {
 export interface ProductDetail extends Product {
   description?: string
   stockQuantity: number
-  stockReserved: number
   version: number
   images: ProductImage[]
   updatedAt: string
