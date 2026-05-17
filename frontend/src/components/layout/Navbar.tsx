@@ -38,6 +38,15 @@ export function Navbar() {
                 >
                   Products
                 </NavLink>
+                <NavLink
+                  to="/categories"
+                  end={false}
+                  className={({ isActive }) =>
+                    `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                  }
+                >
+                  Categories
+                </NavLink>
                 {isLoggedIn && (
                   <>
                     {role === 'seller' && (

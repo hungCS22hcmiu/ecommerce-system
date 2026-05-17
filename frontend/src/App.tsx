@@ -13,6 +13,8 @@ import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
 import { ProductListPage } from '@/pages/ProductListPage'
 import { ProductDetailPage } from '@/pages/ProductDetailPage'
+import { CategoryBrowsePage } from '@/pages/CategoryBrowsePage'
+import { CategoryProductsPage } from '@/pages/CategoryProductsPage'
 import { CartPage } from '@/pages/CartPage'
 import { CheckoutPage } from '@/pages/CheckoutPage'
 import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage'
@@ -50,6 +52,8 @@ export default function App() {
             <Route path="/" element={<Navigate to="/products" replace />} />
             <Route path="/products" element={<ProductListPage />} />
             <Route path="/products/:id" element={<ProductDetailPage />} />
+            <Route path="/categories" element={<CategoryBrowsePage />} />
+            <Route path="/categories/:id" element={<CategoryProductsPage />} />
           </Route>
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
