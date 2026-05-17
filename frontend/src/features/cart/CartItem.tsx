@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useCartMutations } from './useCart'
 import { formatCurrency } from '@/lib/utils'
 import type { CartItem as CartItemType } from '@/types/cart'
@@ -5,9 +6,10 @@ import type { CartItem as CartItemType } from '@/types/cart'
 interface CartItemProps {
   item: CartItemType
   stockAvailable?: number
+  thumbnailUrl?: string
 }
 
-export function CartItem({ item, stockAvailable }: CartItemProps) {
+export function CartItem({ item, stockAvailable, thumbnailUrl }: CartItemProps) {
   const { updateItem, removeItem } = useCartMutations()
 
   const isOutOfStock = stockAvailable !== undefined && stockAvailable === 0
@@ -15,12 +17,22 @@ export function CartItem({ item, stockAvailable }: CartItemProps) {
 
   return (
     <div className="flex items-start gap-3 py-3">
-      <div className="w-14 h-14 bg-surface-overlay border border-surface-border rounded flex-shrink-0 flex items-center justify-center">
-        <span className="text-fg-subtle text-xs">IMG</span>
-      </div>
+      <Link to={`/products/${item.product_id}`} className="flex-shrink-0">
+        <div className="w-14 h-14 bg-surface-overlay border border-surface-border rounded overflow-hidden">
+          {thumbnailUrl ? (
+            <img src={thumbnailUrl} alt={item.product_name} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <span className="text-fg-subtle text-xs">IMG</span>
+            </div>
+          )}
+        </div>
+      </Link>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-fg-base truncate font-medium">{item.product_name}</p>
+        <Link to={`/products/${item.product_id}`} className="hover:text-accent transition-colors">
+          <p className="text-sm text-fg-base truncate font-medium">{item.product_name}</p>
+        </Link>
         <p className="text-xs font-mono text-accent mt-0.5">{formatCurrency(item.unit_price)}</p>
 
         {isOutOfStock && (

@@ -22,8 +22,12 @@ export function CartPage() {
   })
 
   const stockMap: Record<number, number> = {}
+  const thumbnailMap: Record<number, string | undefined> = {}
   productQueries.forEach((q, i) => {
-    if (q.data?.data) stockMap[items[i].product_id] = q.data.data.stockAvailable
+    if (q.data?.data) {
+      stockMap[items[i].product_id] = q.data.data.stockAvailable
+      thumbnailMap[items[i].product_id] = q.data.data.images[0]?.url
+    }
   })
 
   const hasStockWarning = items.some(
@@ -71,7 +75,7 @@ export function CartPage() {
             )}
             <div className="bg-surface-raised border border-surface-border rounded-lg divide-y divide-surface-border px-5">
               {items.map((item) => (
-                <CartItem key={item.product_id} item={item} stockAvailable={stockMap[item.product_id]} />
+                <CartItem key={item.product_id} item={item} stockAvailable={stockMap[item.product_id]} thumbnailUrl={thumbnailMap[item.product_id]} />
               ))}
             </div>
 

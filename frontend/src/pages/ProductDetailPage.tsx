@@ -118,9 +118,11 @@ export function ProductDetailPage() {
 
                 <div className="flex items-center gap-3 mb-5">
                   <StockBadge stock={product.stockAvailable} />
-                  <span className="text-xs text-fg-subtle font-mono">
-                    {product.categoryName}
-                  </span>
+                  {product.categoryName && (
+                    <Link to={`/categories/${product.categoryId}`}>
+                      <Badge variant="blue">{product.categoryName}</Badge>
+                    </Link>
+                  )}
                   {product.stockReserved > 0 && (
                     <span className="text-xs text-fg-subtle font-mono">
                       {product.stockReserved} sold
