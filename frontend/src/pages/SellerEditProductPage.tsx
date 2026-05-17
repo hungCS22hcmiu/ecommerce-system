@@ -14,13 +14,14 @@ export function SellerEditProductPage() {
   const product = data?.data
 
   function handleSubmit(formData: ProductFormData) {
+    const addMore = parseInt(formData.addMoreStock || '0') || 0
     const body: UpdateProductBody = {
       name: formData.name || undefined,
       description: formData.description || undefined,
       price: formData.price ? parseFloat(formData.price) : undefined,
       categoryId: formData.categoryId ? parseInt(formData.categoryId) : undefined,
       status: formData.status,
-      stockQuantity: formData.stockQuantity ? parseInt(formData.stockQuantity) : undefined,
+      stockQuantity: addMore > 0 ? product!.stockQuantity + addMore : undefined,
       images: formData.images.filter((img) => img.url.trim()).map((img) => ({
         url: img.url.trim(),
         altText: img.altText || undefined,

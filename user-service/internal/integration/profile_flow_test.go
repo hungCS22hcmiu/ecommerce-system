@@ -95,7 +95,7 @@ func TestProfileFlow_WithContainers(t *testing.T) {
 	ac := loginattempt.New(rdb)
 
 	vs := verification.New(rdb)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey, nil, "")
 	userSvc := service.NewUserService(userRepo, addrRepo, sc)
 
 	authHandler := handler.NewAuthHandler(authSvc)

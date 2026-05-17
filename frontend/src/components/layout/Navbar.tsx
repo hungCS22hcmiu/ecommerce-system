@@ -29,44 +29,46 @@ export function Navbar() {
               >
                 SHOP
               </Link>
-              {isLoggedIn && (
-                <div className="flex items-center gap-6">
-                  <NavLink
-                    to="/products"
-                    className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
-                    }
-                  >
-                    Products
-                  </NavLink>
-                  {role === 'seller' && (
+              <div className="flex items-center gap-6">
+                <NavLink
+                  to="/products"
+                  className={({ isActive }) =>
+                    `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                  }
+                >
+                  Products
+                </NavLink>
+                {isLoggedIn && (
+                  <>
+                    {role === 'seller' && (
+                      <NavLink
+                        to="/seller/products"
+                        className={({ isActive }) =>
+                          `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                        }
+                      >
+                        My Products
+                      </NavLink>
+                    )}
                     <NavLink
-                      to="/seller/products"
+                      to="/orders"
                       className={({ isActive }) =>
                         `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
                       }
                     >
-                      My Products
+                      Orders
                     </NavLink>
-                  )}
-                  <NavLink
-                    to="/orders"
-                    className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
-                    }
-                  >
-                    Orders
-                  </NavLink>
-                  <NavLink
-                    to="/profile"
-                    className={({ isActive }) =>
-                      `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
-                    }
-                  >
-                    Profile
-                  </NavLink>
-                </div>
-              )}
+                    <NavLink
+                      to="/profile"
+                      className={({ isActive }) =>
+                        `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                      }
+                    >
+                      Profile
+                    </NavLink>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-3">

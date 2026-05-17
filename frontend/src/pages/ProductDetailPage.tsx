@@ -6,11 +6,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency } from '@/lib/utils'
+import { showToast } from '@/lib/toast'
 
 function StockBadge({ stock }: { stock: number }) {
-  if (stock === 0) return <Badge variant="red">Out of Stock</Badge>
-  if (stock <= 5) return <Badge variant="amber">Low Stock ({stock} left)</Badge>
-  return <Badge variant="emerald">In Stock</Badge>
+  const safe = Math.max(0, stock)
+  if (safe === 0) return <Badge variant="red">Out of Stock</Badge>
+  if (safe <= 5) return <Badge variant="amber">Only {safe} left</Badge>
+  return <Badge variant="emerald">{safe} available</Badge>
 }
 
 export function ProductDetailPage() {
@@ -18,7 +20,15 @@ export function ProductDetailPage() {
   const { data, isLoading, isError } = useProduct(Number(id))
   const { addItem } = useCartMutations()
   const [qty, setQty] = useState(1)
+  const [inputVal, setInputVal] = useState('1')
   const [selectedImg, setSelectedImg] = useState(0)
+
+  function applyQty(raw: string, max: number) {
+    const parsed = parseInt(raw, 10)
+    const clamped = Number.isNaN(parsed) ? 1 : Math.min(Math.max(1, parsed), max)
+    setQty(clamped)
+    setInputVal(String(clamped))
+  }
 
   const product = data?.data
 
@@ -111,6 +121,11 @@ export function ProductDetailPage() {
                   <span className="text-xs text-fg-subtle font-mono">
                     {product.categoryName}
                   </span>
+                  {product.stockReserved > 0 && (
+                    <span className="text-xs text-fg-subtle font-mono">
+                      {product.stockReserved} sold
+                    </span>
+                  )}
                 </div>
 
                 {/* Qty selector */}
@@ -119,16 +134,35 @@ export function ProductDetailPage() {
                   <div className="flex items-center border border-surface-border rounded-md overflow-hidden">
                     <button
                       type="button"
-                      onClick={() => setQty((q) => Math.max(1, q - 1))}
+                      onClick={() => {
+                        const next = Math.max(1, qty - 1)
+                        setQty(next)
+                        setInputVal(String(next))
+                      }}
                       disabled={qty <= 1 || product.stockAvailable === 0}
                       className="w-9 h-9 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       −
                     </button>
-                    <span className="w-10 text-center text-sm font-mono text-fg-base">{qty}</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={inputVal}
+                      onChange={(e) => setInputVal(e.target.value.replace(/\D/g, ''))}
+                      onBlur={() => applyQty(inputVal, product.stockAvailable)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') applyQty(inputVal, product.stockAvailable)
+                      }}
+                      disabled={product.stockAvailable === 0}
+                      className="w-14 text-center text-sm font-mono text-fg-base bg-transparent focus:outline-none disabled:opacity-40"
+                    />
                     <button
                       type="button"
-                      onClick={() => setQty((q) => Math.min(product.stockAvailable, q + 1))}
+                      onClick={() => {
+                        const next = Math.min(product.stockAvailable, qty + 1)
+                        setQty(next)
+                        setInputVal(String(next))
+                      }}
                       disabled={qty >= product.stockAvailable || product.stockAvailable === 0}
                       className="w-9 h-9 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
@@ -141,7 +175,24 @@ export function ProductDetailPage() {
                   className="w-full sm:w-auto px-8"
                   disabled={product.stockAvailable === 0 || addItem.isPending}
                   onClick={() =>
-                    addItem.mutate({ product_id: product.id, quantity: qty })
+                    addItem.mutate(
+                      { product_id: product.id, quantity: qty },
+                      {
+                        onSuccess: () => showToast('Added to cart', 'success'),
+                        onError: (err: unknown) => {
+                          const code = (err as { response?: { data?: { code?: string } } })
+                            ?.response?.data?.code
+                          if (code === 'INSUFFICIENT_STOCK') {
+                            showToast(
+                              `Only ${product.stockAvailable} unit(s) available`,
+                              'error',
+                            )
+                          } else {
+                            showToast('Failed to add to cart', 'error')
+                          }
+                        },
+                      },
+                    )
                   }
                 >
                   {addItem.isPending ? 'Adding…' : 'Add to Cart'}

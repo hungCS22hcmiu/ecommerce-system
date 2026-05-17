@@ -49,6 +49,7 @@ var (
 type noopEmailSender struct{}
 
 func (noopEmailSender) SendVerificationCode(_ context.Context, _, _ string) error { return nil }
+func (noopEmailSender) SendPasswordReset(_ context.Context, _, _ string) error    { return nil }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -118,7 +119,7 @@ func TestMain(m *testing.M) {
 	sc := session.New(rdb)
 	ac := loginattempt.New(rdb)
 	vs := verification.New(rdb)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey)
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sc, ac, vs, noopEmailSender{}, privKey, pubKey, nil, "")
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMw := middleware.Auth(pubKey, bl)
 

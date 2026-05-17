@@ -9,20 +9,22 @@ interface MyProductsParams {
   status?: string
   page?: number
   size?: number
+  sort?: string
 }
 
-export function useMyProducts(params: MyProductsParams = {}) {
+export function useMyProducts(params: MyProductsParams = {}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['seller', 'products', params],
     queryFn: () => sellerApi.listMyProducts(params),
     staleTime: 30_000,
+    enabled: options?.enabled ?? true,
   })
 }
 
-export function useSellerProduct(id: number) {
+export function useSellerProduct(id: number | undefined) {
   return useQuery({
     queryKey: ['seller', 'product', id],
-    queryFn: () => sellerApi.getProductById(id),
+    queryFn: () => sellerApi.getProductById(id!),
     enabled: !!id,
     staleTime: 30_000,
   })

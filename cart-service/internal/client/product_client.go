@@ -18,10 +18,11 @@ var (
 )
 
 type ProductInfo struct {
-	ID     int64   `json:"id"`
-	Name   string  `json:"name"`
-	Price  float64 `json:"price"`
-	Status string  `json:"status"`
+	ID             int64   `json:"id"`
+	Name           string  `json:"name"`
+	Price          float64 `json:"price"`
+	Status         string  `json:"status"`
+	StockAvailable int     `json:"stockAvailable"`
 }
 
 type ProductClient interface {

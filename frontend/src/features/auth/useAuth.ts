@@ -47,6 +47,19 @@ export function useResendVerification() {
   return useMutation({ mutationFn: authApi.resendVerification })
 }
 
+export function useForgotPassword() {
+  return useMutation({ mutationFn: authApi.forgotPassword })
+}
+
+export function useResetPassword() {
+  const navigate = useNavigate()
+
+  return useMutation({
+    mutationFn: authApi.resetPassword,
+    onSuccess: () => navigate('/login'),
+  })
+}
+
 export function useLogout() {
   const clearAuth = useAuthStore((s) => s.clearAuth)
   const navigate = useNavigate()

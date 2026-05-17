@@ -1,15 +1,34 @@
 import { Link } from 'react-router-dom'
+import { useQueries } from '@tanstack/react-query'
 import { useCart, useCartMutations } from '@/features/cart/useCart'
 import { CartItem } from '@/features/cart/CartItem'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { formatCurrency } from '@/lib/utils'
+import { productApi } from '@/features/products/productApi'
 
 export function CartPage() {
   const { data, isLoading, isError } = useCart()
   const { clearCart } = useCartMutations()
   const cart = data?.data
   const items = [...(cart?.items ?? [])].sort((a, b) => a.product_id - b.product_id)
+
+  const productQueries = useQueries({
+    queries: items.map((item) => ({
+      queryKey: ['product', item.product_id],
+      queryFn: () => productApi.getById(item.product_id),
+      staleTime: 60_000,
+    })),
+  })
+
+  const stockMap: Record<number, number> = {}
+  productQueries.forEach((q, i) => {
+    if (q.data?.data) stockMap[items[i].product_id] = q.data.data.stockAvailable
+  })
+
+  const hasStockWarning = items.some(
+    (item) => stockMap[item.product_id] !== undefined && item.quantity > stockMap[item.product_id],
+  )
 
   if (isLoading) {
     return (
@@ -45,9 +64,14 @@ export function CartPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Items column */}
           <div className="lg:col-span-2">
+            {hasStockWarning && (
+              <div className="mb-4 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-500">
+                Some items in your cart exceed current available stock. Update quantities before checking out.
+              </div>
+            )}
             <div className="bg-surface-raised border border-surface-border rounded-lg divide-y divide-surface-border px-5">
               {items.map((item) => (
-                <CartItem key={item.product_id} item={item} />
+                <CartItem key={item.product_id} item={item} stockAvailable={stockMap[item.product_id]} />
               ))}
             </div>
 

@@ -10,6 +10,7 @@ export interface ProductFormData {
   categoryId: string
   categoryName: string
   stockQuantity: string
+  addMoreStock?: string
   status: 'ACTIVE' | 'INACTIVE' | 'DELETED'
   images: Array<{ url: string; altText: string; sortOrder: number }>
 }
@@ -107,21 +108,47 @@ export function ProductForm({ defaultValues, onSubmit, isPending, isEdit }: Prop
               required
             />
           </div>
+          {isEdit ? (
+            <div>
+              <label className={labelClass}>Current Stock</label>
+              <div className="flex h-10 w-full items-center rounded-md border border-surface-border bg-surface-overlay px-3 text-sm font-mono text-fg-muted select-none">
+                {form.stockQuantity} units
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className={labelClass}>
+                Stock Quantity <span className="text-red-400">*</span>
+              </label>
+              <Input
+                type="number"
+                value={form.stockQuantity}
+                onChange={(e) => setField('stockQuantity', e.target.value)}
+                placeholder="0"
+                min="0"
+                step="1"
+                required
+              />
+            </div>
+          )}
+        </div>
+
+        {isEdit && (
           <div>
-            <label className={labelClass}>
-              Stock Quantity <span className="text-red-400">*</span>
-            </label>
+            <label className={labelClass}>Add More Stock</label>
             <Input
               type="number"
-              value={form.stockQuantity}
-              onChange={(e) => setField('stockQuantity', e.target.value)}
+              value={form.addMoreStock ?? ''}
+              onChange={(e) => setField('addMoreStock', e.target.value)}
               placeholder="0"
               min="0"
               step="1"
-              required
             />
+            <p className="text-xs text-fg-subtle mt-1">
+              Enter the number of units to add. Leaves stock unchanged if left empty.
+            </p>
           </div>
-        </div>
+        )}
 
         <div>
           <label className={labelClass}>Category</label>

@@ -1,9 +1,10 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency } from '@/lib/utils'
 import { useCartMutations } from '@/features/cart/useCart'
+import { useAuthStore } from '@/store/authStore'
 import type { Product } from '@/types/product'
 
 function stockBadge(stock: number) {
@@ -19,6 +20,17 @@ interface ProductCardProps {
 export function ProductCard({ product }: ProductCardProps) {
   const outOfStock = product.stockAvailable === 0
   const { addItem } = useCartMutations()
+  const accessToken = useAuthStore((s) => s.accessToken)
+  const navigate = useNavigate()
+
+  function handleAddToCart(e: React.MouseEvent) {
+    e.preventDefault()
+    if (!accessToken) {
+      navigate('/login?from=/products')
+      return
+    }
+    addItem.mutate({ product_id: product.id, quantity: 1 })
+  }
 
   return (
     <div className="bg-surface-raised border border-surface-border rounded-lg overflow-hidden flex flex-col group">
@@ -54,10 +66,7 @@ export function ProductCard({ product }: ProductCardProps) {
         <Button
           className="w-full mt-1"
           disabled={outOfStock || addItem.isPending}
-          onClick={(e) => {
-            e.preventDefault()
-            addItem.mutate({ product_id: product.id, quantity: 1 })
-          }}
+          onClick={handleAddToCart}
         >
           {addItem.isPending ? 'Adding…' : 'Add to Cart'}
         </Button>

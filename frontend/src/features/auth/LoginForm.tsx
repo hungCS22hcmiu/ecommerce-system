@@ -81,12 +81,17 @@ export function LoginForm() {
         )}
       </Button>
 
-      <p className="text-center text-sm text-fg-subtle">
-        No account?{' '}
-        <Link to="/register" className="text-accent hover:text-accent-dim">
-          Create one →
+      <div className="flex items-center justify-between text-sm text-fg-subtle">
+        <span>
+          No account?{' '}
+          <Link to="/register" className="text-accent hover:text-accent-dim">
+            Create one →
+          </Link>
+        </span>
+        <Link to="/forgot-password" className="text-fg-muted hover:text-fg-base">
+          Forgot password?
         </Link>
-      </p>
+      </div>
     </form>
   )
 }

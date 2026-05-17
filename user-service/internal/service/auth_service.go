@@ -22,6 +22,7 @@ import (
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/password"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/reset"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
 )
@@ -33,6 +34,9 @@ const (
 	verificationTTL    = 15 * time.Minute
 	resendCooldown     = 60 * time.Second
 	maxVerifyAttempts  = 5
+	resetTokenTTL      = 30 * time.Minute
+	resetCooldown      = 60 * time.Second
+	maxResetAttempts   = 5
 )
 
 var (
@@ -46,6 +50,8 @@ var (
 	ErrAlreadyVerified       = errors.New("email already verified")
 	ErrResendCooldown        = errors.New("resend on cooldown")
 	ErrTooManyVerifyAttempts = errors.New("too many verification attempts")
+	ErrResetCooldown         = errors.New("reset request on cooldown")
+	ErrTooManyResetAttempts  = errors.New("too many reset attempts")
 )
 
 type AuthService interface {
@@ -55,6 +61,8 @@ type AuthService interface {
 	Logout(ctx context.Context, accessToken string) error
 	VerifyEmail(ctx context.Context, req dto.VerifyEmailRequest) error
 	ResendVerification(ctx context.Context, req dto.ResendVerificationRequest) error
+	ForgotPassword(ctx context.Context, req dto.ForgotPasswordRequest) error
+	ResetPassword(ctx context.Context, req dto.ResetPasswordRequest) error
 }
 
 type authService struct {
@@ -68,6 +76,8 @@ type authService struct {
 	emailSender       email.Sender
 	privateKey        *rsa.PrivateKey
 	publicKey         *rsa.PublicKey
+	resetStore        reset.Store
+	appURL            string
 }
 
 // NewAuthService wires all production dependencies.
@@ -82,6 +92,8 @@ func NewAuthService(
 	emailSender email.Sender,
 	privateKey *rsa.PrivateKey,
 	publicKey *rsa.PublicKey,
+	resetStore reset.Store,
+	appURL string,
 ) AuthService {
 	return &authService{
 		userRepo:          userRepo,
@@ -94,6 +106,8 @@ func NewAuthService(
 		emailSender:       emailSender,
 		privateKey:        privateKey,
 		publicKey:         publicKey,
+		resetStore:        resetStore,
+		appURL:            appURL,
 	}
 }
 
@@ -427,6 +441,98 @@ func generateVerificationCode() string {
 		return "000000"
 	}
 	return fmt.Sprintf("%06d", n.Int64())
+}
+
+// ForgotPassword sends a password-reset link to the given email address.
+// Always returns nil even when the email is not registered (prevents enumeration).
+func (s *authService) ForgotPassword(ctx context.Context, req dto.ForgotPasswordRequest) error {
+	if s.resetStore != nil {
+		hasCooldown, err := s.resetStore.HasCooldown(ctx, req.Email)
+		if err != nil {
+			return err
+		}
+		if hasCooldown {
+			return ErrResetCooldown
+		}
+	}
+
+	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil // don't reveal whether the email exists
+	}
+	if err != nil {
+		return err
+	}
+
+	if s.resetStore == nil || s.emailSender == nil {
+		return nil
+	}
+
+	token, err := jwtpkg.GenerateRefreshToken()
+	if err != nil {
+		return fmt.Errorf("generate reset token: %w", err)
+	}
+
+	if err := s.resetStore.SetCode(ctx, user.Email, token, resetTokenTTL); err != nil {
+		return err
+	}
+	if err := s.resetStore.SetCooldown(ctx, user.Email, resetCooldown); err != nil {
+		slog.Error("failed to set reset cooldown", "email", user.Email, "error", err)
+	}
+
+	resetLink := s.appURL + "/reset-password?token=" + token + "&email=" + user.Email
+	if err := s.emailSender.SendPasswordReset(ctx, user.Email, resetLink); err != nil {
+		slog.Error("failed to send reset email", "email", user.Email, "error", err)
+	}
+
+	return nil
+}
+
+// ResetPassword validates a reset token and sets a new password for the user.
+func (s *authService) ResetPassword(ctx context.Context, req dto.ResetPasswordRequest) error {
+	if s.resetStore != nil {
+		count, err := s.resetStore.IncrementAttempts(ctx, req.Email)
+		if err != nil {
+			return err
+		}
+		if count > int64(maxResetAttempts) {
+			return ErrTooManyResetAttempts
+		}
+
+		storedToken, err := s.resetStore.GetCode(ctx, req.Email)
+		if err != nil {
+			return err
+		}
+		if storedToken == "" || storedToken != req.Token {
+			return ErrInvalidCode
+		}
+	}
+
+	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrInvalidCode
+	}
+	if err != nil {
+		return err
+	}
+
+	hash, err := password.Hash(req.Password)
+	if err != nil {
+		return err
+	}
+
+	if err := s.userRepo.UpdatePassword(ctx, user.ID, hash); err != nil {
+		return err
+	}
+
+	// Clean up Redis state
+	if s.resetStore != nil {
+		s.resetStore.DeleteCode(ctx, req.Email)     //nolint:errcheck
+		s.resetStore.DeleteAttempts(ctx, req.Email)  //nolint:errcheck
+	}
+
+	// Revoke all refresh tokens — force re-login everywhere
+	return s.authTokenRepo.RevokeByUserID(ctx, user.ID)
 }
 
 // hashToken returns the SHA-256 hex digest of a token string.
