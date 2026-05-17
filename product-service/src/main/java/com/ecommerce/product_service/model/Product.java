@@ -61,6 +61,13 @@ public class Product {
     @Version
     private Long version;
 
+    @Column(name = "avg_rating", precision = 3, scale = 2)
+    private BigDecimal avgRating;
+
+    @Column(name = "rating_count", nullable = false)
+    @Builder.Default
+    private int ratingCount = 0;
+
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @Builder.Default
     private List<ProductImage> images = new ArrayList<>();

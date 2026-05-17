@@ -7,6 +7,7 @@ import com.ecommerce.order_service.exception.OrderNotFoundException;
 import com.ecommerce.order_service.kafka.OrderEventProducer;
 import com.ecommerce.order_service.kafka.event.OrderCreatedEvent;
 import com.ecommerce.order_service.model.*;
+import com.ecommerce.order_service.repository.OrderItemRepository;
 import com.ecommerce.order_service.repository.OrderRepository;
 import com.ecommerce.order_service.repository.OrderStatusHistoryRepository;
 import com.ecommerce.order_service.service.OrderService;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderItemRepository orderItemRepository;
     private final OrderStatusHistoryRepository historyRepository;
     private final OrderStateMachine stateMachine;
     private final ProductServiceClient productServiceClient;
@@ -218,6 +220,11 @@ public class OrderServiceImpl implements OrderService {
         return historyRepository.findByOrderIdOrderByChangedAtAsc(orderId).stream()
                 .map(OrderStatusHistoryResponse::from)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public boolean verifyPurchase(UUID userId, Long productId, UUID orderItemId) {
+        return orderItemRepository.findVerifiedDeliveredItem(orderItemId, userId, productId).isPresent();
     }
 
     @Override

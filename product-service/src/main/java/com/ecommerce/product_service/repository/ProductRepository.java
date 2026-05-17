@@ -34,13 +34,18 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     List<Product> findTop100ByStatusOrderByUpdatedAtDesc(ProductStatus status);
 
     // Full-text search using the GIN index: idx_products_fts
-    // to_tsvector('english', name || ' ' || COALESCE(description, ''))
+    // Results ranked by ts_rank boosted by avg_rating and stock_reserved (popularity).
     @Query(value = """
             SELECT * FROM products
             WHERE to_tsvector('english', name || ' ' || COALESCE(description, ''))
                   @@ plainto_tsquery('english', :query)
               AND status = 'ACTIVE'
               AND (:categoryId IS NULL OR category_id = :categoryId)
+            ORDER BY
+              ts_rank(to_tsvector('english', name || ' ' || COALESCE(description, '')),
+                      plainto_tsquery('english', :query))
+              * (1.0 + COALESCE(avg_rating, 0)::float / 5.0 * 0.2
+                     + LEAST(stock_reserved, 50)::float / 50.0 * 0.1) DESC
             """,
             countQuery = """
             SELECT COUNT(*) FROM products

@@ -73,4 +73,13 @@ public class OrderController {
             @PathVariable UUID id) {
         return ApiResponse.ok(orderService.getOrderHistory(id, userId));
     }
+
+    @GetMapping("/purchase-verification")
+    public ApiResponse<PurchaseVerificationResponse> verifyPurchase(
+            @RequestHeader("X-User-Id") UUID userId,
+            @RequestParam Long productId,
+            @RequestParam UUID orderItemId) {
+        return ApiResponse.ok(new PurchaseVerificationResponse(
+                orderService.verifyPurchase(userId, productId, orderItemId)));
+    }
 }

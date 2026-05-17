@@ -2,7 +2,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { StarRating } from '@/components/ui/StarRating'
 import { formatCurrency } from '@/lib/utils'
+import { showToast } from '@/lib/toast'
 import { useCartMutations } from '@/features/cart/useCart'
 import { useAuthStore } from '@/store/authStore'
 import type { Product } from '@/types/product'
@@ -29,7 +31,22 @@ export function ProductCard({ product }: ProductCardProps) {
       navigate('/login?from=/products')
       return
     }
-    addItem.mutate({ product_id: product.id, quantity: 1 })
+    addItem.mutate(
+      { product_id: product.id, quantity: 1 },
+      {
+        onSuccess: () => showToast('Added to cart', 'success'),
+        onError: (err: unknown) => {
+          const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code
+          if (code === 'SELLER_CANNOT_BUY_OWN_PRODUCT') {
+            showToast('You cannot purchase your own products', 'error')
+          } else if (code === 'INSUFFICIENT_STOCK') {
+            showToast('Not enough stock available', 'error')
+          } else {
+            showToast('Failed to add to cart', 'error')
+          }
+        },
+      },
+    )
   }
 
   return (
@@ -58,6 +75,13 @@ export function ProductCard({ product }: ProductCardProps) {
         <p className="font-mono text-accent text-lg font-medium">
           {formatCurrency(product.price)}
         </p>
+
+        {product.avgRating != null && product.ratingCount > 0 && (
+          <div className="flex items-center gap-1 mt-1">
+            <StarRating value={product.avgRating} size="sm" />
+            <span className="text-xs text-fg-subtle">({product.ratingCount})</span>
+          </div>
+        )}
 
         <div className="flex items-center justify-between mt-auto pt-2">
           {stockBadge(product.stockAvailable)}

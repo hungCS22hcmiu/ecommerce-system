@@ -36,6 +36,9 @@ public class ProductResponse {
 
     private List<ProductImageResponse> images;
 
+    private Double avgRating;
+    private int ratingCount;
+
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 }

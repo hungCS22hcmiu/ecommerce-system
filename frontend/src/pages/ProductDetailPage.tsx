@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useProduct } from '@/features/products/useProducts'
 import { useCartMutations } from '@/features/cart/useCart'
+import { useProductReviews } from '@/features/reviews/useReviews'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatCurrency } from '@/lib/utils'
+import { StarRating } from '@/components/ui/StarRating'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { showToast } from '@/lib/toast'
 
 function StockBadge({ stock }: { stock: number }) {
@@ -22,6 +24,10 @@ export function ProductDetailPage() {
   const [qty, setQty] = useState(1)
   const [inputVal, setInputVal] = useState('1')
   const [selectedImg, setSelectedImg] = useState(0)
+  const [reviewPage, setReviewPage] = useState(0)
+  const { data: reviewsData } = useProductReviews(Number(id), reviewPage)
+  const reviews = reviewsData?.data ?? []
+  const reviewMeta = reviewsData?.meta
 
   function applyQty(raw: string, max: number) {
     const parsed = parseInt(raw, 10)
@@ -109,6 +115,15 @@ export function ProductDetailPage() {
                 {formatCurrency(product.price)}
               </p>
 
+              {product.ratingCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <StarRating value={product.avgRating!} size="md" />
+                  <span className="text-sm text-fg-muted">
+                    {product.avgRating?.toFixed(1)} ({product.ratingCount} {product.ratingCount === 1 ? 'rating' : 'ratings'})
+                  </span>
+                </div>
+              )}
+
               <div className="border-t border-surface-border pt-4">
                 {product.description && (
                   <p className="text-sm text-fg-muted leading-relaxed mb-4">
@@ -184,7 +199,9 @@ export function ProductDetailPage() {
                         onError: (err: unknown) => {
                           const code = (err as { response?: { data?: { code?: string } } })
                             ?.response?.data?.code
-                          if (code === 'INSUFFICIENT_STOCK') {
+                          if (code === 'SELLER_CANNOT_BUY_OWN_PRODUCT') {
+                            showToast('You cannot purchase your own products', 'error')
+                          } else if (code === 'INSUFFICIENT_STOCK') {
                             showToast(
                               `Only ${product.stockAvailable} unit(s) available`,
                               'error',
@@ -203,6 +220,60 @@ export function ProductDetailPage() {
             </>
           ) : null}
         </div>
+      </div>
+
+      {/* Reviews section */}
+      <div className="mt-10">
+        <h2 className="font-semibold text-fg-base text-lg mb-4">
+          Customer Reviews
+          {reviewsData && (reviewsData.meta?.totalElements ?? 0) > 0 && (
+            <span className="text-fg-subtle text-sm font-normal ml-2">
+              ({reviewsData.meta?.totalElements})
+            </span>
+          )}
+        </h2>
+
+        {reviews.length === 0 ? (
+          <p className="text-fg-subtle text-sm">No reviews yet. Be the first to review this product!</p>
+        ) : (
+          <div className="space-y-4">
+            {reviews.map((review) => (
+              <div key={review.id} className="bg-surface-raised border border-surface-border rounded-lg p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <StarRating value={review.rating} size="sm" />
+                  <span className="text-xs text-fg-subtle">{formatDate(review.createdAt)}</span>
+                </div>
+                {review.comment && (
+                  <p className="text-sm text-fg-muted leading-relaxed">{review.comment}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {reviewMeta && reviewMeta.totalPages > 1 && (
+          <div className="flex items-center gap-2 mt-6">
+            <button
+              type="button"
+              onClick={() => setReviewPage((p) => Math.max(0, p - 1))}
+              disabled={reviewPage === 0}
+              className="px-3 py-1.5 text-xs border border-surface-border rounded-md disabled:opacity-40 hover:bg-surface-raised transition-colors"
+            >
+              ← Prev
+            </button>
+            <span className="text-xs text-fg-subtle">
+              {reviewPage + 1} / {reviewMeta.totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setReviewPage((p) => Math.min(reviewMeta.totalPages - 1, p + 1))}
+              disabled={reviewPage >= reviewMeta.totalPages - 1}
+              className="px-3 py-1.5 text-xs border border-surface-border rounded-md disabled:opacity-40 hover:bg-surface-raised transition-colors"
+            >
+              Next →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

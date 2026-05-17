@@ -1,21 +1,28 @@
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useOrder, useOrderHistory, useCancelOrder } from '@/features/orders/useOrders'
+import { useOrder, useOrderHistory, useCancelOrder, useDeliverOrder } from '@/features/orders/useOrders'
 import { StatusBadge } from '@/features/orders/StatusBadge'
 import { OrderTimeline } from '@/features/orders/OrderTimeline'
+import { ReviewDialog } from '@/components/shared/ReviewDialog'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency, formatDate, truncateId } from '@/lib/utils'
+import { showToast } from '@/lib/toast'
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { data: orderData, isLoading, isError } = useOrder(id ?? '')
   const { data: historyData } = useOrderHistory(id ?? '')
   const cancelOrder = useCancelOrder()
+  const deliverOrder = useDeliverOrder()
+  const [showReview, setShowReview] = useState(false)
 
   const order = orderData?.data
   const history = historyData?.data ?? []
 
   const canCancel = order?.status === 'PENDING' || order?.status === 'CONFIRMED'
+  const canDeliver = order?.status === 'SHIPPED'
+  const isDelivered = order?.status === 'DELIVERED'
 
   if (isError) {
     return (
@@ -113,9 +120,45 @@ export function OrderDetailPage() {
                     </Button>
                   </div>
                 )}
+
+                {canDeliver && (
+                  <div className="mt-5 pt-4 border-t border-surface-border">
+                    <Button
+                      className="w-full"
+                      disabled={deliverOrder.isPending}
+                      onClick={() =>
+                        deliverOrder.mutate(order.id, {
+                          onSuccess: () => {
+                            showToast('Order marked as delivered', 'success')
+                            setShowReview(true)
+                          },
+                          onError: () => showToast('Failed to update order', 'error'),
+                        })
+                      }
+                    >
+                      {deliverOrder.isPending ? 'Confirming…' : 'Mark as Delivered'}
+                    </Button>
+                  </div>
+                )}
+
+                {isDelivered && (
+                  <div className="mt-3">
+                    <Button
+                      variant="outline"
+                      className="w-full text-sm"
+                      onClick={() => setShowReview(true)}
+                    >
+                      Write / Edit Reviews
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
+
+          {showReview && order && (
+            <ReviewDialog items={order.items} onClose={() => setShowReview(false)} />
+          )}
         </>
       ) : null}
     </div>

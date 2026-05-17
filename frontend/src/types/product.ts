@@ -10,6 +10,8 @@ export interface Product {
   stockReserved: number
   thumbnailUrl?: string
   createdAt: string
+  avgRating: number | null
+  ratingCount: number
 }
 
 export interface ProductImage {

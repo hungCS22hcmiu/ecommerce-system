@@ -12,11 +12,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Service
 @Transactional(readOnly = true)
@@ -50,9 +53,23 @@ public class AISearchServiceImpl implements AISearchService {
         Map<Long, Product> byId = productRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(Product::getId, p -> p));
 
-        List<ProductSummaryResponse> results = ids.stream()
-                .map(byId::get)
-                .filter(Objects::nonNull)
+        // Build similarity-score lookup by product id
+        Map<Long, Double> simScoreMap = new HashMap<>();
+        IntStream.range(0, ids.size()).forEach(i -> simScoreMap.put(ids.get(i), scores.get(i)));
+
+        double maxReserved = Math.max(1.0, byId.values().stream()
+                .mapToInt(Product::getStockReserved).max().orElse(1));
+
+        // Re-rank: similarity 75% + rating boost 15% + sales boost 10%
+        List<ProductSummaryResponse> results = byId.values().stream()
+                .filter(p -> simScoreMap.containsKey(p.getId()))
+                .sorted(Comparator.comparingDouble((Product p) -> {
+                    double sim = simScoreMap.getOrDefault(p.getId(), 0.0);
+                    double ratingBoost = p.getAvgRating() != null
+                            ? p.getAvgRating().doubleValue() / 5.0 * 0.15 : 0.0;
+                    double salesBoost = p.getStockReserved() / maxReserved * 0.10;
+                    return -(sim * 0.75 + ratingBoost + salesBoost);
+                }))
                 .map(this::toSummaryResponse)
                 .toList();
 
@@ -77,7 +94,10 @@ public class AISearchServiceImpl implements AISearchService {
                 .sellerId(p.getSellerId())
                 .status(p.getStatus())
                 .stockAvailable(p.getStockQuantity() - p.getStockReserved())
+                .stockReserved(p.getStockReserved())
                 .thumbnailUrl(thumbnail)
+                .avgRating(p.getAvgRating() != null ? p.getAvgRating().doubleValue() : null)
+                .ratingCount(p.getRatingCount())
                 .createdAt(p.getCreatedAt())
                 .build();
     }

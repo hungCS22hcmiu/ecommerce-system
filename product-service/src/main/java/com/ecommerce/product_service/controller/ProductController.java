@@ -78,8 +78,11 @@ public class ProductController {
     public ApiResponse<List<ProductSummaryResponse>> searchProducts(
             @RequestParam String q,
             @RequestParam(required = false) Long categoryId,
-            @PageableDefault(size = 20, sort = "created_at", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ApiResponse.ok(productService.searchProducts(q, categoryId, pageable));
+            @PageableDefault(size = 20) Pageable pageable) {
+        // Ranking ORDER BY is baked into the query — strip Pageable sort to avoid SQL conflict
+        Pageable unsorted = org.springframework.data.domain.PageRequest.of(
+                pageable.getPageNumber(), pageable.getPageSize());
+        return ApiResponse.ok(productService.searchProducts(q, categoryId, unsorted));
     }
 
     @PutMapping("/{id}")
