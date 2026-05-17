@@ -28,8 +28,8 @@ public class AISearchServiceImpl implements AISearchService {
     private final JdbcTemplate jdbcTemplate;
 
     @Override
-    @Cacheable(value = "aiSearch", key = "{#query, #limit}")
-    public AISearchResponse search(String query, int limit) {
+    @Cacheable(value = "aiSearch", key = "{#query, #limit, #categoryId}")
+    public AISearchResponse search(String query, int limit, Long categoryId) {
         if (query == null || query.trim().length() < 2) {
             throw new IllegalArgumentException("Query must be at least 2 characters");
         }
@@ -43,7 +43,7 @@ public class AISearchServiceImpl implements AISearchService {
         // reads the setting at access-method init, before any CTE or WHERE eval.
         jdbcTemplate.execute("SET LOCAL ivfflat.probes = 10");
 
-        List<Object[]> rows = productRepository.findIdsBySemanticSimilarity(vectorLiteral, limit);
+        List<Object[]> rows = productRepository.findIdsBySemanticSimilarity(vectorLiteral, categoryId, limit);
         List<Long> ids = rows.stream().map(r -> ((Number) r[0]).longValue()).toList();
         List<Double> scores = rows.stream().map(r -> ((Number) r[1]).doubleValue()).toList();
 

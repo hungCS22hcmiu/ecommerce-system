@@ -6,9 +6,9 @@ export const productApi = {
   list: (params: ProductListParams = {}) =>
     api.get<ApiResponse<Product[]>>('/products', { params }).then((r) => r.data),
 
-  search: (q: string, page = 0, limit = 20) =>
+  search: (q: string, page = 0, limit = 20, categoryId?: number) =>
     api
-      .get<ApiResponse<Product[]>>('/products/search', { params: { q, page, limit } })
+      .get<ApiResponse<Product[]>>('/products/search', { params: { q, page, limit, categoryId } })
       .then((r) => r.data),
 
   getById: (id: number) =>
@@ -17,8 +17,8 @@ export const productApi = {
   getStock: (id: number) =>
     api.get<ApiResponse<StockLevel>>(`/inventory/${id}`).then((r) => r.data),
 
-  aiSearch: (q: string, limit = 20) =>
+  aiSearch: (q: string, limit = 20, categoryId?: number) =>
     api
-      .get<ApiResponse<AISearchResponse>>('/products/ai-search', { params: { q, limit } })
+      .get<ApiResponse<AISearchResponse>>('/products/ai-search', { params: { q, limit, categoryId } })
       .then((r) => r.data),
 }

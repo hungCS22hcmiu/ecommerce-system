@@ -125,9 +125,9 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
-    @Cacheable(value = "productList", key = "{'search', #query, #pageable.pageNumber, #pageable.pageSize}")
-    public Page<ProductSummaryResponse> searchProducts(String query, Pageable pageable) {
-        return productRepository.searchActive(query, pageable).map(this::toSummaryResponse);
+    @Cacheable(value = "productList", key = "{'search', #query, #categoryId, #pageable.pageNumber, #pageable.pageSize}")
+    public Page<ProductSummaryResponse> searchProducts(String query, Long categoryId, Pageable pageable) {
+        return productRepository.searchActive(query, categoryId, pageable).map(this::toSummaryResponse);
     }
 
     @Override

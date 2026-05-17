@@ -40,15 +40,19 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
             WHERE to_tsvector('english', name || ' ' || COALESCE(description, ''))
                   @@ plainto_tsquery('english', :query)
               AND status = 'ACTIVE'
+              AND (:categoryId IS NULL OR category_id = :categoryId)
             """,
             countQuery = """
             SELECT COUNT(*) FROM products
             WHERE to_tsvector('english', name || ' ' || COALESCE(description, ''))
                   @@ plainto_tsquery('english', :query)
               AND status = 'ACTIVE'
+              AND (:categoryId IS NULL OR category_id = :categoryId)
             """,
             nativeQuery = true)
-    Page<Product> searchActive(@Param("query") String query, Pageable pageable);
+    Page<Product> searchActive(@Param("query") String query,
+                               @Param("categoryId") Long categoryId,
+                               Pageable pageable);
 
     // Returns [id (Long), score (Double)] pairs ordered by cosine similarity descending.
     // Uses id + score only to avoid mapping the unmapped vector(384) column.
@@ -58,9 +62,11 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
             SELECT id, (1 - (embedding <=> CAST(:queryVec AS vector))) AS score
             FROM products
             WHERE status = 'ACTIVE' AND embedding IS NOT NULL
+              AND (:categoryId IS NULL OR category_id = :categoryId)
             ORDER BY embedding <=> CAST(:queryVec AS vector)
             LIMIT :limit
             """, nativeQuery = true)
     List<Object[]> findIdsBySemanticSimilarity(@Param("queryVec") String queryVec,
+                                               @Param("categoryId") Long categoryId,
                                                @Param("limit") int limit);
 }

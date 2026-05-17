@@ -68,16 +68,18 @@ public class ProductController {
     @GetMapping("/ai-search")
     public ApiResponse<AISearchResponse> aiSearch(
             @RequestParam String q,
-            @RequestParam(defaultValue = "10") int limit) {
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(required = false) Long categoryId) {
         int clampedLimit = Math.min(Math.max(limit, 1), 50);
-        return ApiResponse.ok(aiSearchService.search(q, clampedLimit));
+        return ApiResponse.ok(aiSearchService.search(q, clampedLimit, categoryId));
     }
 
     @GetMapping("/search")
     public ApiResponse<List<ProductSummaryResponse>> searchProducts(
             @RequestParam String q,
+            @RequestParam(required = false) Long categoryId,
             @PageableDefault(size = 20, sort = "created_at", direction = Sort.Direction.DESC) Pageable pageable) {
-        return ApiResponse.ok(productService.searchProducts(q, pageable));
+        return ApiResponse.ok(productService.searchProducts(q, categoryId, pageable));
     }
 
     @PutMapping("/{id}")

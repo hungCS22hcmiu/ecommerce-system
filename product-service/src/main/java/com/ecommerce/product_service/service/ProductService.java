@@ -22,7 +22,7 @@ public interface ProductService {
 
     Page<ProductSummaryResponse> listProductsBySeller(UUID sellerId, ProductStatus status, Pageable pageable);
 
-    Page<ProductSummaryResponse> searchProducts(String query, Pageable pageable);
+    Page<ProductSummaryResponse> searchProducts(String query, Long categoryId, Pageable pageable);
 
     ProductResponse updateProduct(Long id, UUID sellerId, UpdateProductRequest request);
 

@@ -10,10 +10,10 @@ export function useProductList(params: ProductListParams = {}) {
   })
 }
 
-export function useProductSearch(q: string, page = 0) {
+export function useProductSearch(q: string, page = 0, categoryId?: number) {
   return useQuery({
-    queryKey: ['products', 'search', q, page],
-    queryFn: () => productApi.search(q, page),
+    queryKey: ['products', 'search', q, page, categoryId],
+    queryFn: () => productApi.search(q, page, 20, categoryId),
     enabled: q.trim().length >= 2,
     staleTime: 3 * 60_000,
   })

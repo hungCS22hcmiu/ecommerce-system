@@ -364,21 +364,21 @@ class ProductServiceImplTest {
             Pageable pageable = PageRequest.of(0, 20);
             Product product = buildProduct(1L, sellerId, ProductStatus.ACTIVE);
             Page<Product> page = new PageImpl<>(List.of(product));
-            when(productRepository.searchActive("laptop", pageable)).thenReturn(page);
+            when(productRepository.searchActive("laptop", null, pageable)).thenReturn(page);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", pageable);
+            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, pageable);
 
             assertThat(result.getContent()).hasSize(1);
-            verify(productRepository).searchActive("laptop", pageable);
+            verify(productRepository).searchActive("laptop", null, pageable);
         }
 
         @Test
         void returnsEmptyPageWhenNoMatches() {
             Pageable pageable = PageRequest.of(0, 20);
             Page<Product> emptyPage = new PageImpl<>(List.of(), pageable, 0);
-            when(productRepository.searchActive("xyz_no_match", pageable)).thenReturn(emptyPage);
+            when(productRepository.searchActive("xyz_no_match", null, pageable)).thenReturn(emptyPage);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("xyz_no_match", pageable);
+            Page<ProductSummaryResponse> result = productService.searchProducts("xyz_no_match", null, pageable);
 
             assertThat(result.getContent()).isEmpty();
             assertThat(result.getTotalElements()).isZero();
@@ -389,9 +389,9 @@ class ProductServiceImplTest {
         void searchLastPageIsEmptyButTotalElementsPreserved() {
             Pageable lastPage = PageRequest.of(3, 10);
             Page<Product> beyondLast = new PageImpl<>(List.of(), lastPage, 27);
-            when(productRepository.searchActive("shoe", lastPage)).thenReturn(beyondLast);
+            when(productRepository.searchActive("shoe", null, lastPage)).thenReturn(beyondLast);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("shoe", lastPage);
+            Page<ProductSummaryResponse> result = productService.searchProducts("shoe", null, lastPage);
 
             assertThat(result.getContent()).isEmpty();
             assertThat(result.getTotalElements()).isEqualTo(27);
@@ -407,9 +407,9 @@ class ProductServiceImplTest {
                     buildProduct(12L, sellerId, ProductStatus.ACTIVE)
             );
             Page<Product> repoPage = new PageImpl<>(products, page1, 12);
-            when(productRepository.searchActive("laptop", page1)).thenReturn(repoPage);
+            when(productRepository.searchActive("laptop", null, page1)).thenReturn(repoPage);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", page1);
+            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, page1);
 
             assertThat(result.getContent()).hasSize(2);
             assertThat(result.getNumber()).isEqualTo(1);
