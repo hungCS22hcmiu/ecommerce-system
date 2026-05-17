@@ -21,4 +21,6 @@ public interface OrderService {
     OrderResponse updateOrderStatus(UUID orderId, OrderStatus newStatus, String reason, String changedBy);
 
     List<OrderStatusHistoryResponse> getOrderHistory(UUID orderId, UUID userId);
+
+    void releaseStockForOrder(UUID orderId);
 }

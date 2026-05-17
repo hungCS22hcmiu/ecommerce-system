@@ -10,6 +10,7 @@ import com.ecommerce.product_service.repository.ProductRepository;
 import com.ecommerce.product_service.repository.StockMovementRepository;
 import com.ecommerce.product_service.service.InventoryService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -28,6 +29,7 @@ public class InventoryServiceImpl implements InventoryService {
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3,
                backoff = @Backoff(delay = 100))
+    @CacheEvict(value = "product", key = "#productId")
     public StockResponse reserveStock(Long productId, int quantity, String referenceId) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ProductNotFoundException(productId));
@@ -55,6 +57,7 @@ public class InventoryServiceImpl implements InventoryService {
     @Retryable(retryFor = ObjectOptimisticLockingFailureException.class,
                maxAttempts = 3,
                backoff = @Backoff(delay = 100))
+    @CacheEvict(value = "product", key = "#productId")
     public StockResponse releaseStock(Long productId, int quantity, String referenceId) {
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ProductNotFoundException(productId));

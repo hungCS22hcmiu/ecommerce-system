@@ -53,6 +53,7 @@ public class PaymentEventConsumer {
                     "Payment failed: " + event.getReason(),
                     "payment-service"
             );
+            orderService.releaseStockForOrder(event.getOrderId());
         } catch (Exception e) {
             log.error("Failed to cancel order after payment failure", e);
         } finally {

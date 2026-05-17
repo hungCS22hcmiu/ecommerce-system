@@ -220,4 +220,18 @@ public class OrderServiceImpl implements OrderService {
                 .collect(Collectors.toList());
     }
 
+    @Override
+    @Transactional
+    public void releaseStockForOrder(UUID orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        for (OrderItem item : order.getItems()) {
+            try {
+                productServiceClient.releaseStock(item.getProductId(), item.getQuantity(), orderId.toString());
+            } catch (Exception e) {
+                log.error("Failed to release stock for productId={} on payment failure", item.getProductId(), e);
+            }
+        }
+    }
+
 }
