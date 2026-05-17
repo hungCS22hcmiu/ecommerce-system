@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom'
+import { useQueries } from '@tanstack/react-query'
 import { useCart, useCartMutations } from './useCart'
 import { CartItem } from './CartItem'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils'
+import { productApi } from '@/features/products/productApi'
 
 interface CartDrawerProps {
   open: boolean
@@ -14,6 +16,19 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
   const { clearCart } = useCartMutations()
   const cart = data?.data
   const items = [...(cart?.items ?? [])].sort((a, b) => a.product_id - b.product_id)
+
+  const productQueries = useQueries({
+    queries: items.map((item) => ({
+      queryKey: ['product', item.product_id],
+      queryFn: () => productApi.getById(item.product_id),
+      staleTime: 60_000,
+    })),
+  })
+
+  const stockMap: Record<number, number> = {}
+  productQueries.forEach((q, i) => {
+    if (q.data?.data) stockMap[items[i].product_id] = q.data.data.stockAvailable
+  })
 
   return (
     <>
@@ -57,7 +72,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
           ) : (
             <div className="divide-y divide-surface-border">
               {items.map((item) => (
-                <CartItem key={item.product_id} item={item} />
+                <CartItem key={item.product_id} item={item} stockAvailable={stockMap[item.product_id]} />
               ))}
             </div>
           )}

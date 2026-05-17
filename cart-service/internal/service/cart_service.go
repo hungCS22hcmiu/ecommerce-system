@@ -16,6 +16,7 @@ var (
 	ErrProductServiceUnavailable = errors.New("product service unavailable")
 	ErrItemNotInCart             = errors.New("item not in cart")
 	ErrConcurrentUpdate          = errors.New("concurrent cart update, please retry")
+	ErrInsufficientStock         = errors.New("insufficient stock")
 )
 
 type CartService interface {
@@ -79,6 +80,10 @@ func (s *cartService) AddItem(ctx context.Context, userID uuid.UUID, req dto.Add
 			return nil, ErrProductServiceUnavailable
 		}
 		return nil, err
+	}
+
+	if req.Quantity > product.StockAvailable {
+		return nil, ErrInsufficientStock
 	}
 
 	err = s.redisRepo.AddOrUpdateItem(ctx, userID, req.ProductID, repository.CartItemValue{

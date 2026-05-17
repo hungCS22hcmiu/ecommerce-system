@@ -151,7 +151,7 @@ func TestAddItem_Success(t *testing.T) {
 	req := dto.AddItemRequest{ProductID: 1, Quantity: 2}
 
 	productClient.On("GetProduct", ctx, int64(1)).Return(&client.ProductInfo{
-		ID: 1, Name: "Widget", Price: 9.99, Status: "ACTIVE",
+		ID: 1, Name: "Widget", Price: 9.99, Status: "ACTIVE", StockAvailable: 10,
 	}, nil)
 	redisRepo.On("AddOrUpdateItem", ctx, userID, int64(1), repository.CartItemValue{
 		ProductName: "Widget", Quantity: 2, UnitPrice: 9.99,
@@ -169,6 +169,27 @@ func TestAddItem_Success(t *testing.T) {
 	assert.InDelta(t, 19.98, resp.Total, 0.01)
 	redisRepo.AssertExpectations(t)
 	productClient.AssertExpectations(t)
+}
+
+func TestAddItem_InsufficientStock(t *testing.T) {
+	redisRepo := &mockRedisRepo{}
+	cartRepo := &mockCartRepo{}
+	productClient := &mockProductClient{}
+
+	userID := uuid.New()
+	req := dto.AddItemRequest{ProductID: 1, Quantity: 5}
+
+	productClient.On("GetProduct", ctx, int64(1)).Return(&client.ProductInfo{
+		ID: 1, Name: "Widget", Price: 9.99, Status: "ACTIVE", StockAvailable: 3,
+	}, nil)
+
+	svc := newSvc(redisRepo, cartRepo, productClient)
+	_, err := svc.AddItem(ctx, userID, req)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, service.ErrInsufficientStock))
+	productClient.AssertExpectations(t)
+	redisRepo.AssertNotCalled(t, "AddOrUpdateItem")
 }
 
 func TestAddItem_ProductNotFound(t *testing.T) {
@@ -216,7 +237,7 @@ func TestAddItem_ConcurrentUpdate(t *testing.T) {
 	req := dto.AddItemRequest{ProductID: 1, Quantity: 1}
 
 	productClient.On("GetProduct", ctx, int64(1)).Return(&client.ProductInfo{
-		ID: 1, Name: "Widget", Price: 9.99, Status: "ACTIVE",
+		ID: 1, Name: "Widget", Price: 9.99, Status: "ACTIVE", StockAvailable: 10,
 	}, nil)
 	redisRepo.On("AddOrUpdateItem", ctx, userID, int64(1), mock.AnythingOfType("repository.CartItemValue")).
 		Return(repository.ErrConcurrentUpdate)

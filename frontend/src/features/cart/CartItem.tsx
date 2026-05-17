@@ -4,10 +4,14 @@ import type { CartItem as CartItemType } from '@/types/cart'
 
 interface CartItemProps {
   item: CartItemType
+  stockAvailable?: number
 }
 
-export function CartItem({ item }: CartItemProps) {
+export function CartItem({ item, stockAvailable }: CartItemProps) {
   const { updateItem, removeItem } = useCartMutations()
+
+  const isOutOfStock = stockAvailable !== undefined && stockAvailable === 0
+  const isAtMax = stockAvailable !== undefined && item.quantity >= stockAvailable
 
   return (
     <div className="flex items-start gap-3 py-3">
@@ -18,6 +22,10 @@ export function CartItem({ item }: CartItemProps) {
       <div className="flex-1 min-w-0">
         <p className="text-sm text-fg-base truncate font-medium">{item.product_name}</p>
         <p className="text-xs font-mono text-accent mt-0.5">{formatCurrency(item.unit_price)}</p>
+
+        {isOutOfStock && (
+          <p className="text-xs text-status-failed mt-1">Out of stock</p>
+        )}
 
         <div className="flex items-center gap-2 mt-2">
           <div className="flex items-center border border-surface-border rounded overflow-hidden">
@@ -30,7 +38,7 @@ export function CartItem({ item }: CartItemProps) {
                   updateItem.mutate({ productId: item.product_id, quantity: item.quantity - 1 })
                 }
               }}
-              disabled={updateItem.isPending || removeItem.isPending}
+              disabled={updateItem.isPending || removeItem.isPending || isOutOfStock}
               className="w-7 h-7 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 transition-colors text-sm"
             >
               −
@@ -41,12 +49,16 @@ export function CartItem({ item }: CartItemProps) {
               onClick={() =>
                 updateItem.mutate({ productId: item.product_id, quantity: item.quantity + 1 })
               }
-              disabled={updateItem.isPending}
+              disabled={updateItem.isPending || isAtMax || isOutOfStock}
               className="w-7 h-7 flex items-center justify-center text-fg-muted hover:text-fg-base hover:bg-surface-raised disabled:opacity-40 transition-colors text-sm"
             >
               +
             </button>
           </div>
+
+          {isAtMax && !isOutOfStock && (
+            <span className="text-xs text-amber-500 font-medium">Max</span>
+          )}
 
           <span className="text-xs font-mono text-fg-muted ml-auto">
             {formatCurrency(item.subtotal)}

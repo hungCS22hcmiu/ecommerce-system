@@ -181,7 +181,14 @@ export function CheckoutPage() {
 
               {createOrder.isError && (
                 <p className="text-xs text-status-failed">
-                  Failed to place order. Please try again.
+                  {(() => {
+                    const code = (createOrder.error as { response?: { data?: { error?: { code?: string; message?: string } } } })
+                      ?.response?.data?.error
+                    if (code?.code === 'INSUFFICIENT_STOCK') {
+                      return `Out of stock: ${code.message ?? 'one or more items exceed available stock. Please update your cart.'}`
+                    }
+                    return 'Failed to place order. Please try again.'
+                  })()}
                 </p>
               )}
 
