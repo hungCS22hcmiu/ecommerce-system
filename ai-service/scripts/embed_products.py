@@ -13,6 +13,7 @@ Env vars (all have defaults for local docker-compose):
 import argparse
 import json
 import os
+import time
 import urllib.request
 
 import psycopg
@@ -25,7 +26,7 @@ DB_DSN = (
     f"password={os.getenv('DB_PASSWORD', 'postgres')}"
 )
 AI_URL = os.getenv("AI_SERVICE_URL", "http://localhost:9000")
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
 
 def call_embed_batch(texts: list[str]) -> list[list[float]]:
@@ -61,26 +62,34 @@ def main():
         print("Nothing to embed.")
         return
 
-    print(f"Embedding {len(rows)} products in batches of {BATCH_SIZE}...")
+    total = len(rows)
+    print(f"Embedding {total} products in batches of {BATCH_SIZE}...")
     updated = 0
+    start = time.time()
 
     with psycopg.connect(DB_DSN) as conn:
-        for i in range(0, len(rows), BATCH_SIZE):
+        for i in range(0, total, BATCH_SIZE):
             batch = rows[i : i + BATCH_SIZE]
             ids = [r[0] for r in batch]
             texts = [r[1] for r in batch]
 
             embeddings = call_embed_batch(texts)
 
-            for pid, vec in zip(ids, embeddings):
-                vec_literal = "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
-                conn.execute(
-                    "UPDATE products SET embedding = %s::vector WHERE id = %s",
-                    (vec_literal, pid),
-                )
+            pairs = [
+                ("[" + ",".join(f"{v:.8f}" for v in vec) + "]", pid)
+                for pid, vec in zip(ids, embeddings)
+            ]
+            conn.executemany(
+                "UPDATE products SET embedding = %s::vector WHERE id = %s",
+                pairs,
+            )
             conn.commit()
             updated += len(batch)
-            print(f"  {updated}/{len(rows)} done")
+
+            elapsed = time.time() - start
+            rate = updated / elapsed if elapsed > 0 else 0
+            eta = (total - updated) / rate if rate > 0 else 0
+            print(f"  {updated}/{total} done | {rate:.0f} products/s | ETA {eta:.0f}s")
 
     print(f"Backfill complete. {updated} rows updated.")
 
