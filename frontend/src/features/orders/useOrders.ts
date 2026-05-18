@@ -48,3 +48,14 @@ export function useCreateOrder() {
     },
   })
 }
+
+export function useDeliverOrder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => orderApi.deliver(id),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['order', id] })
+      qc.invalidateQueries({ queryKey: ['orders'] })
+    },
+  })
+}

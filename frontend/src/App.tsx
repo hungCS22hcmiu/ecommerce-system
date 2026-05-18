@@ -13,6 +13,9 @@ import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage'
 import { ProductListPage } from '@/pages/ProductListPage'
 import { ProductDetailPage } from '@/pages/ProductDetailPage'
+import { CategoryBrowsePage } from '@/pages/CategoryBrowsePage'
+import { CategoryProductsPage } from '@/pages/CategoryProductsPage'
+import { SellerShopPage } from '@/pages/SellerShopPage'
 import { CartPage } from '@/pages/CartPage'
 import { CheckoutPage } from '@/pages/CheckoutPage'
 import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage'
@@ -22,6 +25,8 @@ import { ProfilePage } from '@/pages/ProfilePage'
 import { SellerDashboardPage } from '@/pages/SellerDashboardPage'
 import { SellerCreateProductPage } from '@/pages/SellerCreateProductPage'
 import { SellerEditProductPage } from '@/pages/SellerEditProductPage'
+import { SellerOrdersPage } from '@/pages/SellerOrdersPage'
+import { SellerOrderDetailPage } from '@/pages/SellerOrderDetailPage'
 import { ToastContainer } from '@/components/ui/Toast'
 
 function Layout() {
@@ -50,6 +55,9 @@ export default function App() {
             <Route path="/" element={<Navigate to="/products" replace />} />
             <Route path="/products" element={<ProductListPage />} />
             <Route path="/products/:id" element={<ProductDetailPage />} />
+            <Route path="/categories" element={<CategoryBrowsePage />} />
+            <Route path="/categories/:id" element={<CategoryProductsPage />} />
+            <Route path="/sellers/:id" element={<SellerShopPage />} />
           </Route>
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
@@ -63,6 +71,8 @@ export default function App() {
                 <Route path="/seller/products" element={<SellerDashboardPage />} />
                 <Route path="/seller/products/new" element={<SellerCreateProductPage />} />
                 <Route path="/seller/products/:id/edit" element={<SellerEditProductPage />} />
+                <Route path="/seller/orders" element={<SellerOrdersPage />} />
+                <Route path="/seller/orders/:id" element={<SellerOrderDetailPage />} />
               </Route>
             </Route>
           </Route>

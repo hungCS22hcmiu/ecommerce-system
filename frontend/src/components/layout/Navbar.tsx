@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/authStore'
 import { useCartStore } from '@/store/cartStore'
 import { useLogout } from '@/features/auth/useAuth'
 import { CartDrawer } from '@/features/cart/CartDrawer'
+import { NotificationBell } from '@/components/shared/NotificationBell'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
@@ -38,17 +39,36 @@ export function Navbar() {
                 >
                   Products
                 </NavLink>
+                <NavLink
+                  to="/categories"
+                  end={false}
+                  className={({ isActive }) =>
+                    `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                  }
+                >
+                  Categories
+                </NavLink>
                 {isLoggedIn && (
                   <>
                     {role === 'seller' && (
-                      <NavLink
-                        to="/seller/products"
-                        className={({ isActive }) =>
-                          `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
-                        }
-                      >
-                        My Products
-                      </NavLink>
+                      <>
+                        <NavLink
+                          to="/seller/products"
+                          className={({ isActive }) =>
+                            `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                          }
+                        >
+                          My Products
+                        </NavLink>
+                        <NavLink
+                          to="/seller/orders"
+                          className={({ isActive }) =>
+                            `text-sm transition-colors ${isActive ? 'text-fg-base' : 'text-fg-muted hover:text-fg-base'}`
+                          }
+                        >
+                          Seller Orders
+                        </NavLink>
+                      </>
                     )}
                     <NavLink
                       to="/orders"
@@ -79,6 +99,8 @@ export function Navbar() {
                   </span>
 
                   <ThemeToggle />
+
+                  <NotificationBell />
 
                   {/* Cart button */}
                   <button

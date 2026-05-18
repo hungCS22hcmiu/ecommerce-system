@@ -2,6 +2,7 @@ package com.ecommerce.order_service.controller;
 
 import com.ecommerce.order_service.dto.*;
 import com.ecommerce.order_service.model.OrderStatus;
+import com.ecommerce.order_service.service.NotificationService;
 import com.ecommerce.order_service.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ import java.util.UUID;
 public class OrderController {
 
     private final OrderService orderService;
+    private final NotificationService notificationService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -53,10 +55,25 @@ public class OrderController {
 
     @PutMapping("/{id}/ship")
     public ApiResponse<OrderResponse> shipOrder(
-            @RequestHeader("X-User-Id") UUID actorId,
+            @RequestHeader("X-User-Id") UUID sellerId,
             @PathVariable UUID id) {
-        return ApiResponse.ok(orderService.updateOrderStatus(
-                id, OrderStatus.SHIPPED, "Shipped by seller", actorId.toString()));
+        return ApiResponse.ok(orderService.shipOrder(id, sellerId));
+    }
+
+    @GetMapping("/seller")
+    public ApiResponse<List<OrderSummaryResponse>> listSellerOrders(
+            @RequestHeader("X-User-Id") UUID sellerId,
+            @RequestParam(required = false) OrderStatus status,
+            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+        Page<OrderSummaryResponse> page = orderService.listSellerOrders(sellerId, status, pageable);
+        return ApiResponse.ok(page);
+    }
+
+    @GetMapping("/seller/{id}")
+    public ApiResponse<OrderResponse> getSellerOrder(
+            @RequestHeader("X-User-Id") UUID sellerId,
+            @PathVariable UUID id) {
+        return ApiResponse.ok(orderService.getOrderAsSeller(id, sellerId));
     }
 
     @PutMapping("/{id}/deliver")
@@ -72,5 +89,34 @@ public class OrderController {
             @RequestHeader("X-User-Id") UUID userId,
             @PathVariable UUID id) {
         return ApiResponse.ok(orderService.getOrderHistory(id, userId));
+    }
+
+    @GetMapping("/purchase-verification")
+    public ApiResponse<PurchaseVerificationResponse> verifyPurchase(
+            @RequestHeader("X-User-Id") UUID userId,
+            @RequestParam Long productId,
+            @RequestParam UUID orderItemId) {
+        return ApiResponse.ok(new PurchaseVerificationResponse(
+                orderService.verifyPurchase(userId, productId, orderItemId)));
+    }
+
+    @GetMapping("/notifications")
+    public ApiResponse<NotificationSummaryResponse> getNotifications(
+            @RequestHeader("X-User-Id") UUID userId) {
+        return ApiResponse.ok(notificationService.getSummary(userId));
+    }
+
+    @PutMapping("/notifications/mark-read")
+    public ApiResponse<Void> markNotificationsRead(
+            @RequestHeader("X-User-Id") UUID userId) {
+        notificationService.markAllRead(userId);
+        return ApiResponse.ok((Void) null);
+    }
+
+    @PostMapping("/notifications/internal/review")
+    public ApiResponse<Void> createReviewNotification(
+            @RequestBody ReviewNotificationRequest req) {
+        notificationService.notifySellerReview(req.sellerId(), req.productId(), req.title(), req.body());
+        return ApiResponse.ok((Void) null);
     }
 }

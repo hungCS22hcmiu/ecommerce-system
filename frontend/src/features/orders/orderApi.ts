@@ -17,4 +17,7 @@ export const orderApi = {
 
   cancel: (id: string) =>
     api.put<ApiResponse<Order>>(`/orders/${id}/cancel`).then((r) => r.data),
+
+  deliver: (id: string) =>
+    api.put<ApiResponse<Order>>(`/orders/${id}/deliver`).then((r) => r.data),
 }

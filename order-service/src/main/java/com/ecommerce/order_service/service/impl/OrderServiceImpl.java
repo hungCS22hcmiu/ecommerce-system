@@ -7,8 +7,10 @@ import com.ecommerce.order_service.exception.OrderNotFoundException;
 import com.ecommerce.order_service.kafka.OrderEventProducer;
 import com.ecommerce.order_service.kafka.event.OrderCreatedEvent;
 import com.ecommerce.order_service.model.*;
+import com.ecommerce.order_service.repository.OrderItemRepository;
 import com.ecommerce.order_service.repository.OrderRepository;
 import com.ecommerce.order_service.repository.OrderStatusHistoryRepository;
+import com.ecommerce.order_service.service.NotificationService;
 import com.ecommerce.order_service.service.OrderService;
 import com.ecommerce.order_service.service.OrderStateMachine;
 import lombok.RequiredArgsConstructor;
@@ -32,10 +34,12 @@ import java.util.stream.Collectors;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderItemRepository orderItemRepository;
     private final OrderStatusHistoryRepository historyRepository;
     private final OrderStateMachine stateMachine;
     private final ProductServiceClient productServiceClient;
     private final OrderEventProducer eventProducer;
+    private final NotificationService notificationService;
 
     @Override
     @Transactional
@@ -98,22 +102,39 @@ public class OrderServiceImpl implements OrderService {
                 .items(new ArrayList<>())
                 .build();
 
-        // 3. Build and attach order items, compute total
+        // 3. Build and attach order items, compute total, validate same seller
         BigDecimal total = BigDecimal.ZERO;
+        UUID orderSellerId = null;
+
         for (OrderItemRequest itemReq : items) {
             ProductServiceClient.ProductDetail product = productServiceClient.getProduct(itemReq.getProductId());
-            BigDecimal unitPrice = product.getPrice();
+
+            UUID productSellerId = UUID.fromString(product.getSellerId());
+            if (orderSellerId == null) {
+                orderSellerId = productSellerId;
+            } else if (!orderSellerId.equals(productSellerId)) {
+                for (OrderItemRequest i : items) {
+                    try {
+                        productServiceClient.releaseStock(i.getProductId(), i.getQuantity(), "order-" + userId);
+                    } catch (Exception ex) {
+                        log.error("Failed to release stock for productId={} after mixed-seller rejection", i.getProductId(), ex);
+                    }
+                }
+                throw new IllegalArgumentException("All items in an order must be from the same seller");
+            }
+
             OrderItem item = OrderItem.builder()
                     .order(order)
                     .productId(itemReq.getProductId())
                     .productName(product.getName())
                     .quantity(itemReq.getQuantity())
-                    .unitPrice(unitPrice)
+                    .unitPrice(product.getPrice())
                     .build();
             order.getItems().add(item);
-            total = total.add(unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity())));
+            total = total.add(product.getPrice().multiply(BigDecimal.valueOf(itemReq.getQuantity())));
         }
         order.setTotalAmount(total);
+        order.setSellerId(orderSellerId);
 
         // 4. Persist
         Order saved = orderRepository.save(order);
@@ -141,6 +162,14 @@ public class OrderServiceImpl implements OrderService {
                         .collect(Collectors.toList()))
                 .build();
         eventProducer.publishOrderCreated(event);
+
+        try {
+            notificationService.notifySeller(orderSellerId, saved.getId(),
+                    "New order #" + saved.getId().toString().substring(0, 8).toUpperCase(),
+                    "A customer placed an order totalling $" + total);
+        } catch (Exception e) {
+            log.warn("Failed to notify seller of new order", e);
+        }
 
         log.info("Order created: orderId={}, userId={}, total={}", saved.getId(), userId, total);
         return OrderResponse.from(saved);
@@ -180,6 +209,17 @@ public class OrderServiceImpl implements OrderService {
                 log.error("Failed to release stock for productId={} on cancel", item.getProductId(), e);
             }
         }
+
+        if (order.getSellerId() != null) {
+            try {
+                notificationService.notifySeller(order.getSellerId(), orderId,
+                        "Order cancelled by customer",
+                        "Order #" + orderId.toString().substring(0, 8).toUpperCase() + " was cancelled by the buyer.");
+            } catch (Exception e) {
+                log.warn("Failed to notify seller of order cancellation", e);
+            }
+        }
+
         return response;
     }
 
@@ -221,6 +261,11 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    public boolean verifyPurchase(UUID userId, Long productId, UUID orderItemId) {
+        return orderItemRepository.findVerifiedDeliveredItem(orderItemId, userId, productId).isPresent();
+    }
+
+    @Override
     @Transactional
     public void releaseStockForOrder(UUID orderId) {
         Order order = orderRepository.findById(orderId)
@@ -232,6 +277,45 @@ public class OrderServiceImpl implements OrderService {
                 log.error("Failed to release stock for productId={} on payment failure", item.getProductId(), e);
             }
         }
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse shipOrder(UUID orderId, UUID sellerId) {
+        Order order = orderRepository.findByIdWithLock(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        if (!sellerId.equals(order.getSellerId())) {
+            throw new OrderAccessDeniedException(orderId);
+        }
+        OrderResponse response = updateOrderStatus(orderId, OrderStatus.SHIPPED, "Shipped by seller", sellerId.toString());
+
+        try {
+            notificationService.notifyBuyer(order.getUserId(), orderId,
+                    "Your order has been shipped",
+                    "Order #" + orderId.toString().substring(0, 8).toUpperCase() + " is on its way.");
+        } catch (Exception e) {
+            log.warn("Failed to notify buyer of shipment", e);
+        }
+
+        return response;
+    }
+
+    @Override
+    public Page<OrderSummaryResponse> listSellerOrders(UUID sellerId, OrderStatus status, Pageable pageable) {
+        Page<Order> page = (status != null)
+                ? orderRepository.findBySellerIdAndStatusOrderByCreatedAtDesc(sellerId, status, pageable)
+                : orderRepository.findBySellerIdOrderByCreatedAtDesc(sellerId, pageable);
+        return page.map(OrderSummaryResponse::from);
+    }
+
+    @Override
+    public OrderResponse getOrderAsSeller(UUID orderId, UUID sellerId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        if (!sellerId.equals(order.getSellerId())) {
+            throw new OrderAccessDeniedException(orderId);
+        }
+        return OrderResponse.from(order);
     }
 
 }

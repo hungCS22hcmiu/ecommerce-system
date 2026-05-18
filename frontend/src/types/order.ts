@@ -21,6 +21,7 @@ export interface Order {
   id: string
   userId: string
   cartId: string
+  sellerId?: string
   totalAmount: number
   status: OrderStatus
   shippingAddress: ShippingAddress
@@ -31,6 +32,8 @@ export interface Order {
 
 export interface OrderSummary {
   id: string
+  userId?: string
+  sellerId?: string
   totalAmount: number
   status: OrderStatus
   itemCount: number

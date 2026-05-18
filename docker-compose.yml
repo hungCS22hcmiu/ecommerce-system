@@ -199,6 +199,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       AI_SERVICE_URL: http://ai-service:9000
+      ORDER_SERVICE_URL: http://order-service:8082
       ENV: ${ENV:-development}
     depends_on:
       postgres:

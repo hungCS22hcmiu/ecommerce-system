@@ -69,6 +69,7 @@ public class ProductServiceClient {
     public static class ProductDetail {
         private String name;
         private BigDecimal price;
+        private String sellerId;
     }
 
     @Data

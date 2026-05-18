@@ -14,6 +14,8 @@ import java.util.UUID;
 public class OrderSummaryResponse {
 
     private UUID id;
+    private UUID userId;
+    private UUID sellerId;
     private BigDecimal totalAmount;
     private OrderStatus status;
     private int itemCount;
@@ -22,6 +24,8 @@ public class OrderSummaryResponse {
     public static OrderSummaryResponse from(Order order) {
         return OrderSummaryResponse.builder()
                 .id(order.getId())
+                .userId(order.getUserId())
+                .sellerId(order.getSellerId())
                 .totalAmount(order.getTotalAmount())
                 .status(order.getStatus())
                 .itemCount(order.getItems().size())

@@ -9,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -32,8 +31,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AIServiceException.class)
     public ResponseEntity<ApiResponse<AISearchResponse>> handleAIService(AIServiceException ex) {
         log.warn("AI search fallback triggered for query='{}': {}", ex.getQuery(), ex.getMessage());
-        Pageable pageable = PageRequest.of(0, ex.getLimit(), Sort.by("created_at").descending());
-        Page<ProductSummaryResponse> page = productService.searchProducts(ex.getQuery(), pageable);
+        Pageable pageable = PageRequest.of(0, ex.getLimit());
+        Page<ProductSummaryResponse> page = productService.searchProducts(ex.getQuery(), null, null, pageable);
         AISearchResponse fallback = new AISearchResponse(ex.getQuery(), page.getContent(), null, "fallback-keyword");
         return ResponseEntity.ok(ApiResponse.ok(fallback));
     }
@@ -66,6 +65,36 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ApiResponse<?> handleAccessDenied(ProductAccessDeniedException ex) {
         return ApiResponse.error("ACCESS_DENIED", ex.getMessage());
+    }
+
+    @ExceptionHandler(ReviewNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiResponse<?> handleReviewNotFound(ReviewNotFoundException ex) {
+        return ApiResponse.error("REVIEW_NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(ReviewAccessDeniedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ApiResponse<?> handleReviewAccessDenied(ReviewAccessDeniedException ex) {
+        return ApiResponse.error("ACCESS_DENIED", ex.getMessage());
+    }
+
+    @ExceptionHandler(AlreadyReviewedException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiResponse<?> handleAlreadyReviewed(AlreadyReviewedException ex) {
+        return ApiResponse.error("ALREADY_REVIEWED", ex.getMessage());
+    }
+
+    @ExceptionHandler(PurchaseNotVerifiedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ApiResponse<?> handlePurchaseNotVerified(PurchaseNotVerifiedException ex) {
+        return ApiResponse.error("PURCHASE_NOT_VERIFIED", ex.getMessage());
+    }
+
+    @ExceptionHandler(PurchaseVerificationException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public ApiResponse<?> handlePurchaseVerificationException(PurchaseVerificationException ex) {
+        return ApiResponse.error("PURCHASE_VERIFICATION_ERROR", ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

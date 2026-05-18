@@ -60,12 +60,12 @@ class AISearchServiceTest {
         void returnsAiModeOnSuccess() {
             List<Object[]> rows = new ArrayList<>();
             rows.add(new Object[]{1L, 0.95});
-            when(productRepository.findIdsBySemanticSimilarity(anyString(), eq(LIMIT)))
+            when(productRepository.findIdsBySemanticSimilarity(anyString(), isNull(), eq(LIMIT)))
                     .thenReturn(rows);
             when(productRepository.findAllById(List.of(1L)))
                     .thenReturn(List.of(buildProduct(1L)));
 
-            AISearchResponse resp = service.search(QUERY, LIMIT);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.mode()).isEqualTo("ai");
             assertThat(resp.query()).isEqualTo(QUERY);
@@ -78,12 +78,12 @@ class AISearchServiceTest {
             List<Object[]> rows = new ArrayList<>();
             rows.add(new Object[]{10L, 0.9});
             rows.add(new Object[]{20L, 0.7});
-            when(productRepository.findIdsBySemanticSimilarity(anyString(), eq(LIMIT)))
+            when(productRepository.findIdsBySemanticSimilarity(anyString(), isNull(), eq(LIMIT)))
                     .thenReturn(rows);
             when(productRepository.findAllById(List.of(10L, 20L)))
                     .thenReturn(List.of(buildProduct(20L), buildProduct(10L)));
 
-            AISearchResponse resp = service.search(QUERY, LIMIT);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.results().get(0).getId()).isEqualTo(10L);
             assertThat(resp.results().get(1).getId()).isEqualTo(20L);
@@ -91,11 +91,11 @@ class AISearchServiceTest {
 
         @Test
         void emptyResultsWhenNothingEmbedded() {
-            when(productRepository.findIdsBySemanticSimilarity(anyString(), anyInt()))
+            when(productRepository.findIdsBySemanticSimilarity(anyString(), isNull(), anyInt()))
                     .thenReturn(new ArrayList<>());
             when(productRepository.findAllById(anyList())).thenReturn(List.of());
 
-            AISearchResponse resp = service.search(QUERY, LIMIT);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.results()).isEmpty();
             assertThat(resp.scores()).isEmpty();
@@ -107,25 +107,25 @@ class AISearchServiceTest {
 
         @Test
         void throwsOnNullQuery() {
-            assertThatThrownBy(() -> service.search(null, LIMIT))
+            assertThatThrownBy(() -> service.search(null, LIMIT, null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("2 characters");
         }
 
         @Test
         void throwsOnShortQuery() {
-            assertThatThrownBy(() -> service.search("x", LIMIT))
+            assertThatThrownBy(() -> service.search("x", LIMIT, null, null))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
         void acceptsTwoCharQuery() {
-            when(productRepository.findIdsBySemanticSimilarity(anyString(), anyInt()))
+            when(productRepository.findIdsBySemanticSimilarity(anyString(), isNull(), anyInt()))
                     .thenReturn(new ArrayList<>());
             when(productRepository.findAllById(anyList())).thenReturn(List.of());
             when(embeddingClient.embed(eq("ok"), eq("ok"), eq(LIMIT))).thenReturn(UNIT_VEC);
 
-            AISearchResponse resp = service.search("ok", LIMIT);
+            AISearchResponse resp = service.search("ok", LIMIT, null, null);
             assertThat(resp.mode()).isEqualTo("ai");
         }
     }
@@ -138,7 +138,7 @@ class AISearchServiceTest {
             when(embeddingClient.embed(eq(QUERY), eq(QUERY), eq(LIMIT)))
                     .thenThrow(new AIServiceException("timeout", null, QUERY, LIMIT));
 
-            assertThatThrownBy(() -> service.search(QUERY, LIMIT))
+            assertThatThrownBy(() -> service.search(QUERY, LIMIT, null, null))
                     .isInstanceOf(AIServiceException.class)
                     .extracting("query").isEqualTo(QUERY);
         }

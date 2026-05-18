@@ -23,6 +23,7 @@ type ProductInfo struct {
 	Price          float64 `json:"price"`
 	Status         string  `json:"status"`
 	StockAvailable int     `json:"stockAvailable"`
+	SellerID       string  `json:"sellerId"`
 }
 
 type ProductClient interface {
@@ -56,7 +57,7 @@ func (c *productClient) GetProduct(ctx context.Context, productID int64) (*Produ
 	const maxAttempts = 3
 	var lastErr error
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():

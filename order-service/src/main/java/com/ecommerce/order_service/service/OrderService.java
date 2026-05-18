@@ -23,4 +23,12 @@ public interface OrderService {
     List<OrderStatusHistoryResponse> getOrderHistory(UUID orderId, UUID userId);
 
     void releaseStockForOrder(UUID orderId);
+
+    boolean verifyPurchase(UUID userId, Long productId, UUID orderItemId);
+
+    OrderResponse shipOrder(UUID orderId, UUID sellerId);
+
+    Page<OrderSummaryResponse> listSellerOrders(UUID sellerId, OrderStatus status, Pageable pageable);
+
+    OrderResponse getOrderAsSeller(UUID orderId, UUID sellerId);
 }

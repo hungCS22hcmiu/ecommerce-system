@@ -63,6 +63,8 @@ func handleCartError(c *gin.Context, err error) {
 		response.Error(c, http.StatusConflict, "CONCURRENT_UPDATE", "concurrent update detected, please retry", nil)
 	case errors.Is(err, service.ErrInsufficientStock):
 		response.Error(c, http.StatusConflict, "INSUFFICIENT_STOCK", "insufficient stock available", nil)
+	case errors.Is(err, service.ErrSellerCannotBuyOwnProduct):
+		response.Error(c, http.StatusForbidden, "SELLER_CANNOT_BUY_OWN_PRODUCT", "Sellers cannot purchase their own products", nil)
 	default:
 		response.InternalError(c)
 	}

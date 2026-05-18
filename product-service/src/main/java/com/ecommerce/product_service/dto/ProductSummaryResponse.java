@@ -30,5 +30,8 @@ public class ProductSummaryResponse {
     private int stockReserved;
     private String thumbnailUrl;
 
+    private Double avgRating;
+    private int ratingCount;
+
     private OffsetDateTime createdAt;
 }

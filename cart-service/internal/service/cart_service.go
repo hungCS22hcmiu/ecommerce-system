@@ -17,6 +17,7 @@ var (
 	ErrItemNotInCart             = errors.New("item not in cart")
 	ErrConcurrentUpdate          = errors.New("concurrent cart update, please retry")
 	ErrInsufficientStock         = errors.New("insufficient stock")
+	ErrSellerCannotBuyOwnProduct = errors.New("sellers cannot purchase their own products")
 )
 
 type CartService interface {
@@ -84,6 +85,10 @@ func (s *cartService) AddItem(ctx context.Context, userID uuid.UUID, req dto.Add
 
 	if req.Quantity > product.StockAvailable {
 		return nil, ErrInsufficientStock
+	}
+
+	if product.SellerID != "" && userID.String() == product.SellerID {
+		return nil, ErrSellerCannotBuyOwnProduct
 	}
 
 	err = s.redisRepo.AddOrUpdateItem(ctx, userID, req.ProductID, repository.CartItemValue{

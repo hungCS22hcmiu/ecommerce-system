@@ -35,6 +35,14 @@ func (m *mockUserService) GetUser(ctx context.Context, userID uuid.UUID) (*dto.U
 	return args.Get(0).(*dto.UserResponse), args.Error(1)
 }
 
+func (m *mockUserService) GetSellerProfile(ctx context.Context, sellerID uuid.UUID) (*dto.SellerProfileResponse, error) {
+	args := m.Called(ctx, sellerID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*dto.SellerProfileResponse), args.Error(1)
+}
+
 func (m *mockUserService) GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

@@ -2,8 +2,6 @@ package com.ecommerce.order_service.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.ColumnTransformer;
-
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -24,13 +22,11 @@ public class OrderStatusHistory {
     private UUID orderId;
 
     @Enumerated(EnumType.STRING)
-    @ColumnTransformer(write = "?::order_status")
-    @Column(name = "old_status", columnDefinition = "order_status")
+    @Column(name = "old_status")
     private OrderStatus oldStatus;
 
     @Enumerated(EnumType.STRING)
-    @ColumnTransformer(write = "?::order_status")
-    @Column(name = "new_status", nullable = false, columnDefinition = "order_status")
+    @Column(name = "new_status", nullable = false)
     private OrderStatus newStatus;
 
     @Column(name = "reason")

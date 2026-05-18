@@ -103,8 +103,10 @@ class OrderServiceImplTest {
         return new ProductServiceClient.StockResponse(productId, 10, 0);
     }
 
+    private static final String SELLER_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
     private ProductServiceClient.ProductDetail productDetail(Long productId) {
-        return new ProductServiceClient.ProductDetail("Product " + productId, new BigDecimal("10.00"));
+        return new ProductServiceClient.ProductDetail("Product " + productId, new BigDecimal("10.00"), SELLER_ID);
     }
 
     private void givenOrderExists(Order order) {
@@ -151,8 +153,8 @@ class OrderServiceImplTest {
 
             when(productServiceClient.reserveStock(eq(1L), eq(2), any())).thenReturn(stockOk(1L));
             when(productServiceClient.reserveStock(eq(2L), eq(2), any())).thenReturn(stockOk(2L));
-            when(productServiceClient.getProduct(1L)).thenReturn(new ProductServiceClient.ProductDetail("Widget", new BigDecimal("10.00")));
-            when(productServiceClient.getProduct(2L)).thenReturn(new ProductServiceClient.ProductDetail("Gadget", new BigDecimal("5.00")));
+            when(productServiceClient.getProduct(1L)).thenReturn(new ProductServiceClient.ProductDetail("Widget", new BigDecimal("10.00"), SELLER_ID));
+            when(productServiceClient.getProduct(2L)).thenReturn(new ProductServiceClient.ProductDetail("Gadget", new BigDecimal("5.00"), SELLER_ID));
             when(orderRepository.save(any())).thenReturn(saved);
 
             orderService.createOrder(userId, request);
