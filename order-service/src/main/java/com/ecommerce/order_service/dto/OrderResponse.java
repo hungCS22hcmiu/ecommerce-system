@@ -19,6 +19,7 @@ public class OrderResponse {
     private UUID id;
     private UUID userId;
     private UUID cartId;
+    private UUID sellerId;
     private BigDecimal totalAmount;
     private OrderStatus status;
     private ShippingAddress shippingAddress;
@@ -31,6 +32,7 @@ public class OrderResponse {
                 .id(order.getId())
                 .userId(order.getUserId())
                 .cartId(order.getCartId())
+                .sellerId(order.getSellerId())
                 .totalAmount(order.getTotalAmount())
                 .status(order.getStatus())
                 .shippingAddress(order.getShippingAddress())

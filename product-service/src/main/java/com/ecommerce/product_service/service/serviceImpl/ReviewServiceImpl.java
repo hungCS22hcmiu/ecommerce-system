@@ -65,6 +65,14 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         recalculateAndEvict(product);
+
+        String notifBody = req.getRating() + "/5 stars"
+                + (req.getComment() != null && !req.getComment().isBlank()
+                   ? " — " + req.getComment().substring(0, Math.min(req.getComment().length(), 80)) : "");
+        orderServiceClient.notifySellerReview(
+                product.getSellerId(), product.getId(),
+                "New review on " + product.getName(), notifBody);
+
         return toReviewResponse(review);
     }
 

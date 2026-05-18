@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useProduct } from '@/features/products/useProducts'
+import { useSellerProfile } from '@/features/sellers/useSellerProfile'
 import { useCartMutations } from '@/features/cart/useCart'
 import { useProductReviews } from '@/features/reviews/useReviews'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +21,9 @@ function StockBadge({ stock }: { stock: number }) {
 export function ProductDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { data, isLoading, isError } = useProduct(Number(id))
+  const product = data?.data
+  const { data: sellerData } = useSellerProfile(product?.sellerId)
+  const seller = sellerData?.data
   const { addItem } = useCartMutations()
   const [qty, setQty] = useState(1)
   const [inputVal, setInputVal] = useState('1')
@@ -35,8 +39,6 @@ export function ProductDetailPage() {
     setQty(clamped)
     setInputVal(String(clamped))
   }
-
-  const product = data?.data
 
   if (isError) {
     return (
@@ -131,11 +133,18 @@ export function ProductDetailPage() {
                   </p>
                 )}
 
-                <div className="flex items-center gap-3 mb-5">
+                <div className="flex items-center flex-wrap gap-3 mb-5">
                   <StockBadge stock={product.stockAvailable} />
                   {product.categoryName && (
                     <Link to={`/categories/${product.categoryId}`}>
                       <Badge variant="blue">{product.categoryName}</Badge>
+                    </Link>
+                  )}
+                  {seller && (
+                    <Link to={`/sellers/${product.sellerId}`}>
+                      <Badge variant="amber">
+                        Sold by {seller.firstName} {seller.lastName}
+                      </Badge>
                     </Link>
                   )}
                   {product.stockReserved > 0 && (

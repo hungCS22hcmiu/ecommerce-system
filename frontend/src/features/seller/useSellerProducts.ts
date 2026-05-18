@@ -10,6 +10,7 @@ interface MyProductsParams {
   page?: number
   size?: number
   sort?: string
+  ratedOnly?: boolean
 }
 
 export function useMyProducts(params: MyProductsParams = {}, options?: { enabled?: boolean }) {

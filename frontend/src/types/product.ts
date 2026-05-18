@@ -38,9 +38,12 @@ export interface StockLevel {
 
 export interface ProductListParams {
   page?: number
+  size?: number
   limit?: number
   categoryId?: number
   status?: string
+  sellerId?: string
+  sort?: string
 }
 
 export interface AISearchResponse {

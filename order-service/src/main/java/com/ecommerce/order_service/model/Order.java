@@ -34,12 +34,14 @@ public class Order {
     @Column(name = "cart_id", columnDefinition = "uuid")
     private UUID cartId;
 
+    @Column(name = "seller_id", columnDefinition = "uuid")
+    private UUID sellerId;
+
     @Column(name = "total_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
     @Enumerated(EnumType.STRING)
-    @ColumnTransformer(write = "?::order_status")
-    @Column(name = "status", nullable = false, columnDefinition = "order_status")
+    @Column(name = "status", nullable = false)
     private OrderStatus status;
 
     @Convert(converter = ShippingAddressConverter.class)

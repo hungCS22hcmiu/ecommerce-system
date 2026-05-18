@@ -10,6 +10,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.LinkedHashMap;
 
 @Slf4j
 @Component
@@ -20,6 +21,22 @@ public class OrderServiceClient {
     private String orderServiceUrl;
 
     private final RestTemplate restTemplate;
+
+    public void notifySellerReview(UUID sellerId, Long productId, String title, String body) {
+        String url = orderServiceUrl + "/api/v1/orders/notifications/internal/review";
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sellerId", sellerId.toString());
+            payload.put("productId", productId);
+            payload.put("title", title);
+            payload.put("body", body);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            restTemplate.postForEntity(url, new HttpEntity<>(payload, headers), Map.class);
+        } catch (Exception e) {
+            log.warn("Failed to send review notification seller={} product={}: {}", sellerId, productId, e.getMessage());
+        }
+    }
 
     @SuppressWarnings("unchecked")
     public boolean verifyPurchase(UUID userId, Long productId, UUID orderItemId) {

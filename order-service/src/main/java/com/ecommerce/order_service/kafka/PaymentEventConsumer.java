@@ -3,6 +3,8 @@ package com.ecommerce.order_service.kafka;
 import com.ecommerce.order_service.kafka.event.PaymentCompletedEvent;
 import com.ecommerce.order_service.kafka.event.PaymentFailedEvent;
 import com.ecommerce.order_service.model.OrderStatus;
+import com.ecommerce.order_service.repository.OrderRepository;
+import com.ecommerce.order_service.service.NotificationService;
 import com.ecommerce.order_service.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,8 @@ import java.util.UUID;
 public class PaymentEventConsumer {
 
     private final OrderService orderService;
+    private final OrderRepository orderRepository;
+    private final NotificationService notificationService;
 
     @KafkaListener(topics = "payments.completed", groupId = "order-service")
     public void onPaymentCompleted(ConsumerRecord<String, PaymentCompletedEvent> record) {
@@ -34,6 +38,18 @@ public class PaymentEventConsumer {
                     "Payment completed (paymentId=" + event.getPaymentId() + ")",
                     "payment-service"
             );
+            orderRepository.findById(event.getOrderId()).ifPresent(order -> {
+                if (order.getSellerId() != null) {
+                    try {
+                        notificationService.notifySeller(order.getSellerId(), event.getOrderId(),
+                                "Payment confirmed — ready to ship",
+                                "Order #" + event.getOrderId().toString().substring(0, 8).toUpperCase()
+                                        + " has been paid and is ready to ship.");
+                    } catch (Exception ex) {
+                        log.warn("Failed to notify seller of payment confirmation", ex);
+                    }
+                }
+            });
         } catch (Exception e) {
             log.error("Failed to confirm order after payment completion", e);
         } finally {

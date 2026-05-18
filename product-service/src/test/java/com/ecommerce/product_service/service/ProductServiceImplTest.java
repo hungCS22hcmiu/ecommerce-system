@@ -366,7 +366,7 @@ class ProductServiceImplTest {
             Page<Product> page = new PageImpl<>(List.of(product));
             when(productRepository.searchActive("laptop", null, pageable)).thenReturn(page);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, pageable);
+            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, null, pageable);
 
             assertThat(result.getContent()).hasSize(1);
             verify(productRepository).searchActive("laptop", null, pageable);
@@ -378,7 +378,7 @@ class ProductServiceImplTest {
             Page<Product> emptyPage = new PageImpl<>(List.of(), pageable, 0);
             when(productRepository.searchActive("xyz_no_match", null, pageable)).thenReturn(emptyPage);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("xyz_no_match", null, pageable);
+            Page<ProductSummaryResponse> result = productService.searchProducts("xyz_no_match", null, null, pageable);
 
             assertThat(result.getContent()).isEmpty();
             assertThat(result.getTotalElements()).isZero();
@@ -391,7 +391,7 @@ class ProductServiceImplTest {
             Page<Product> beyondLast = new PageImpl<>(List.of(), lastPage, 27);
             when(productRepository.searchActive("shoe", null, lastPage)).thenReturn(beyondLast);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("shoe", null, lastPage);
+            Page<ProductSummaryResponse> result = productService.searchProducts("shoe", null, null, lastPage);
 
             assertThat(result.getContent()).isEmpty();
             assertThat(result.getTotalElements()).isEqualTo(27);
@@ -409,7 +409,7 @@ class ProductServiceImplTest {
             Page<Product> repoPage = new PageImpl<>(products, page1, 12);
             when(productRepository.searchActive("laptop", null, page1)).thenReturn(repoPage);
 
-            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, page1);
+            Page<ProductSummaryResponse> result = productService.searchProducts("laptop", null, null, page1);
 
             assertThat(result.getContent()).hasSize(2);
             assertThat(result.getNumber()).isEqualTo(1);

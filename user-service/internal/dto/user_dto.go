@@ -48,3 +48,12 @@ type ProfileResponse struct {
 	AvatarURL string            `json:"avatar_url"`
 	Addresses []AddressResponse `json:"addresses"`
 }
+
+type SellerProfileResponse struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	AvatarURL string `json:"avatarUrl"`
+	CreatedAt string `json:"createdAt"`
+}

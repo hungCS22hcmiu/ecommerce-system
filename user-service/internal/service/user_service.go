@@ -19,6 +19,7 @@ var (
 
 type UserService interface {
 	GetUser(ctx context.Context, userID uuid.UUID) (*dto.UserResponse, error)
+	GetSellerProfile(ctx context.Context, sellerID uuid.UUID) (*dto.SellerProfileResponse, error)
 	GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error)
 	UpdateProfile(ctx context.Context, userID uuid.UUID, req dto.UpdateProfileRequest) (*dto.ProfileResponse, error)
 	AddAddress(ctx context.Context, userID uuid.UUID, req dto.CreateAddressRequest) (*dto.AddressResponse, error)
@@ -46,6 +47,30 @@ func (s *userService) GetUser(ctx context.Context, userID uuid.UUID) (*dto.UserR
 		return nil, err
 	}
 	return toUserResponse(user), nil
+}
+
+func (s *userService) GetSellerProfile(ctx context.Context, sellerID uuid.UUID) (*dto.SellerProfileResponse, error) {
+	user, err := s.userRepo.FindByIDWithProfile(ctx, sellerID)
+	if err != nil {
+		if err == repository.ErrNotFound {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	if user.Role != "seller" {
+		return nil, ErrUserNotFound
+	}
+	resp := &dto.SellerProfileResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		CreatedAt: user.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if user.Profile != nil {
+		resp.FirstName = user.Profile.FirstName
+		resp.LastName = user.Profile.LastName
+		resp.AvatarURL = user.Profile.AvatarURL
+	}
+	return resp, nil
 }
 
 func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*dto.ProfileResponse, error) {

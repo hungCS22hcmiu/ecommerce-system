@@ -58,9 +58,10 @@ public class ProductController {
             @RequestParam(required = false) UUID sellerId,
             @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) ProductStatus status,
+            @RequestParam(defaultValue = "false") boolean ratedOnly,
             @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         if (sellerId != null) {
-            return ApiResponse.ok(productService.listProductsBySeller(sellerId, status, pageable));
+            return ApiResponse.ok(productService.listProductsBySeller(sellerId, status, ratedOnly, pageable));
         }
         return ApiResponse.ok(productService.listProducts(categoryId, status, pageable));
     }
@@ -69,20 +70,22 @@ public class ProductController {
     public ApiResponse<AISearchResponse> aiSearch(
             @RequestParam String q,
             @RequestParam(defaultValue = "10") int limit,
-            @RequestParam(required = false) Long categoryId) {
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) UUID sellerId) {
         int clampedLimit = Math.min(Math.max(limit, 1), 50);
-        return ApiResponse.ok(aiSearchService.search(q, clampedLimit, categoryId));
+        return ApiResponse.ok(aiSearchService.search(q, clampedLimit, categoryId, sellerId));
     }
 
     @GetMapping("/search")
     public ApiResponse<List<ProductSummaryResponse>> searchProducts(
             @RequestParam String q,
             @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) UUID sellerId,
             @PageableDefault(size = 20) Pageable pageable) {
         // Ranking ORDER BY is baked into the query — strip Pageable sort to avoid SQL conflict
         Pageable unsorted = org.springframework.data.domain.PageRequest.of(
                 pageable.getPageNumber(), pageable.getPageSize());
-        return ApiResponse.ok(productService.searchProducts(q, categoryId, unsorted));
+        return ApiResponse.ok(productService.searchProducts(q, categoryId, sellerId, unsorted));
     }
 
     @PutMapping("/{id}")

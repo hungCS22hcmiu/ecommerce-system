@@ -65,7 +65,7 @@ class AISearchServiceTest {
             when(productRepository.findAllById(List.of(1L)))
                     .thenReturn(List.of(buildProduct(1L)));
 
-            AISearchResponse resp = service.search(QUERY, LIMIT, null);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.mode()).isEqualTo("ai");
             assertThat(resp.query()).isEqualTo(QUERY);
@@ -83,7 +83,7 @@ class AISearchServiceTest {
             when(productRepository.findAllById(List.of(10L, 20L)))
                     .thenReturn(List.of(buildProduct(20L), buildProduct(10L)));
 
-            AISearchResponse resp = service.search(QUERY, LIMIT, null);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.results().get(0).getId()).isEqualTo(10L);
             assertThat(resp.results().get(1).getId()).isEqualTo(20L);
@@ -95,7 +95,7 @@ class AISearchServiceTest {
                     .thenReturn(new ArrayList<>());
             when(productRepository.findAllById(anyList())).thenReturn(List.of());
 
-            AISearchResponse resp = service.search(QUERY, LIMIT, null);
+            AISearchResponse resp = service.search(QUERY, LIMIT, null, null);
 
             assertThat(resp.results()).isEmpty();
             assertThat(resp.scores()).isEmpty();
@@ -107,14 +107,14 @@ class AISearchServiceTest {
 
         @Test
         void throwsOnNullQuery() {
-            assertThatThrownBy(() -> service.search(null, LIMIT, null))
+            assertThatThrownBy(() -> service.search(null, LIMIT, null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("2 characters");
         }
 
         @Test
         void throwsOnShortQuery() {
-            assertThatThrownBy(() -> service.search("x", LIMIT, null))
+            assertThatThrownBy(() -> service.search("x", LIMIT, null, null))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -125,7 +125,7 @@ class AISearchServiceTest {
             when(productRepository.findAllById(anyList())).thenReturn(List.of());
             when(embeddingClient.embed(eq("ok"), eq("ok"), eq(LIMIT))).thenReturn(UNIT_VEC);
 
-            AISearchResponse resp = service.search("ok", LIMIT, null);
+            AISearchResponse resp = service.search("ok", LIMIT, null, null);
             assertThat(resp.mode()).isEqualTo("ai");
         }
     }
@@ -138,7 +138,7 @@ class AISearchServiceTest {
             when(embeddingClient.embed(eq(QUERY), eq(QUERY), eq(LIMIT)))
                     .thenThrow(new AIServiceException("timeout", null, QUERY, LIMIT));
 
-            assertThatThrownBy(() -> service.search(QUERY, LIMIT, null))
+            assertThatThrownBy(() -> service.search(QUERY, LIMIT, null, null))
                     .isInstanceOf(AIServiceException.class)
                     .extracting("query").isEqualTo(QUERY);
         }

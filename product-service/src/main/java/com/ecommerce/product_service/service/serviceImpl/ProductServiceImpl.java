@@ -97,7 +97,12 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
-    public Page<ProductSummaryResponse> listProductsBySeller(UUID sellerId, ProductStatus status, Pageable pageable) {
+    public Page<ProductSummaryResponse> listProductsBySeller(UUID sellerId, ProductStatus status, boolean ratedOnly, Pageable pageable) {
+        if (ratedOnly) {
+            return (status != null)
+                ? productRepository.findBySellerIdAndStatusAndRatingCountGreaterThan(sellerId, status, 0, pageable).map(this::toSummaryResponse)
+                : productRepository.findBySellerIdAndRatingCountGreaterThan(sellerId, 0, pageable).map(this::toSummaryResponse);
+        }
         if (status != null) {
             return productRepository.findBySellerIdAndStatus(sellerId, status, pageable).map(this::toSummaryResponse);
         }
@@ -125,8 +130,12 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
-    @Cacheable(value = "productList", key = "{'search', #query, #categoryId, #pageable.pageNumber, #pageable.pageSize}")
-    public Page<ProductSummaryResponse> searchProducts(String query, Long categoryId, Pageable pageable) {
+    @Cacheable(value = "productList", key = "{'search', #query, #categoryId, #sellerId, #pageable.pageNumber, #pageable.pageSize}")
+    public Page<ProductSummaryResponse> searchProducts(String query, Long categoryId, UUID sellerId, Pageable pageable) {
+        if (sellerId != null) {
+            return productRepository.searchActiveBySeller(query, sellerId, categoryId, pageable)
+                    .map(this::toSummaryResponse);
+        }
         return productRepository.searchActive(query, categoryId, pageable).map(this::toSummaryResponse);
     }
 

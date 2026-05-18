@@ -22,6 +22,28 @@ func NewUserHandler(userService service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
+// GetSellerProfile handles GET /api/v1/users/sellers/:id.
+// Public endpoint — returns only safe, public seller info (name, avatar, join date).
+func (h *UserHandler) GetSellerProfile(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "INVALID_SELLER_ID", "seller ID is not a valid UUID", nil)
+		return
+	}
+
+	seller, err := h.userService.GetSellerProfile(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrUserNotFound) {
+			response.NotFound(c, "seller")
+			return
+		}
+		response.InternalError(c)
+		return
+	}
+
+	response.Success(c, seller)
+}
+
 // GetUser handles GET /api/v1/users/:id.
 // Internal endpoint for service-to-service lookups — no JWT auth required.
 // Security boundary: Docker internal network.

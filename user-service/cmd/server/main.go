@@ -159,6 +159,10 @@ func main() {
 		users.DELETE("/addresses/:id", userHandler.DeleteAddress)
 		users.PUT("/addresses/:id/default", userHandler.SetDefaultAddress)
 
+		// Public seller profile — no JWT required.
+		usersPublic := v1.Group("/users")
+		usersPublic.GET("/sellers/:id", userHandler.GetSellerProfile)
+
 		// Internal service-to-service routes — no JWT required.
 		// Reachable only within the Docker internal network (not exposed externally).
 		usersInternal := v1.Group("/users")

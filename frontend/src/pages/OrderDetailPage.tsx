@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { useQueries } from '@tanstack/react-query'
 import { useOrder, useOrderHistory, useCancelOrder, useDeliverOrder } from '@/features/orders/useOrders'
+import { useSellerProfile } from '@/features/sellers/useSellerProfile'
 import { StatusBadge } from '@/features/orders/StatusBadge'
 import { OrderTimeline } from '@/features/orders/OrderTimeline'
 import { ReviewDialog } from '@/components/shared/ReviewDialog'
@@ -8,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency, formatDate, truncateId } from '@/lib/utils'
 import { showToast } from '@/lib/toast'
+import { productApi } from '@/features/products/productApi'
 
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -19,6 +22,25 @@ export function OrderDetailPage() {
 
   const order = orderData?.data
   const history = historyData?.data ?? []
+
+  const productQueries = useQueries({
+    queries: (order?.items ?? []).map((item) => ({
+      queryKey: ['product', item.productId],
+      queryFn: () => productApi.getById(item.productId),
+      staleTime: 60_000,
+      enabled: !!order,
+    })),
+  })
+
+  const thumbnailMap: Record<number, string | undefined> = {}
+  productQueries.forEach((q, i) => {
+    if (q.data?.data && order) {
+      thumbnailMap[order.items[i].productId] = q.data.data.images[0]?.url
+    }
+  })
+
+  const { data: sellerData } = useSellerProfile(order?.sellerId)
+  const sellerEmail = sellerData?.data?.email
 
   const canCancel = order?.status === 'PENDING' || order?.status === 'CONFIRMED'
   const canDeliver = order?.status === 'SHIPPED'
@@ -66,16 +88,51 @@ export function OrderDetailPage() {
             {/* Left — items + address */}
             <div className="lg:col-span-3 space-y-5">
               <div className="bg-surface-raised border border-surface-border rounded-lg p-5">
-                <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider mb-4">
-                  Items
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-xs font-semibold text-fg-muted uppercase tracking-wider">
+                    Items
+                  </h2>
+                  {sellerEmail && (
+                    <span className="text-xs font-mono text-fg-subtle">
+                      Sold by{' '}
+                      <Link
+                        to={`/sellers/${order.sellerId}`}
+                        className="text-accent hover:text-accent-dim transition-colors"
+                      >
+                        {sellerEmail}
+                      </Link>
+                    </span>
+                  )}
+                </div>
                 <div className="space-y-3">
                   {order.items.map((item) => (
-                    <div key={item.id} className="flex justify-between text-sm">
-                      <span className="text-fg-muted">
-                        {item.productName} × {item.quantity}
+                    <div key={item.id} className="flex items-center gap-3 text-sm">
+                      <Link
+                        to={`/products/${item.productId}`}
+                        className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden border border-surface-border bg-surface-overlay hover:opacity-80 transition-opacity"
+                      >
+                        {thumbnailMap[item.productId] ? (
+                          <img
+                            src={thumbnailMap[item.productId]}
+                            alt={item.productName}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-surface-overlay" />
+                        )}
+                      </Link>
+                      <span className="flex-1 text-fg-muted">
+                        <Link
+                          to={`/products/${item.productId}`}
+                          className="hover:text-fg-base transition-colors"
+                        >
+                          {item.productName}
+                        </Link>
+                        {' '}× {item.quantity}
                       </span>
-                      <span className="font-mono text-fg-base">{formatCurrency(item.subtotal)}</span>
+                      <span className="font-mono text-fg-base flex-shrink-0">
+                        {formatCurrency(item.subtotal)}
+                      </span>
                     </div>
                   ))}
                 </div>

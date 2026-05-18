@@ -32,7 +32,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<AISearchResponse>> handleAIService(AIServiceException ex) {
         log.warn("AI search fallback triggered for query='{}': {}", ex.getQuery(), ex.getMessage());
         Pageable pageable = PageRequest.of(0, ex.getLimit());
-        Page<ProductSummaryResponse> page = productService.searchProducts(ex.getQuery(), null, pageable);
+        Page<ProductSummaryResponse> page = productService.searchProducts(ex.getQuery(), null, null, pageable);
         AISearchResponse fallback = new AISearchResponse(ex.getQuery(), page.getContent(), null, "fallback-keyword");
         return ResponseEntity.ok(ApiResponse.ok(fallback));
     }

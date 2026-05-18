@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -31,8 +32,8 @@ public class AISearchServiceImpl implements AISearchService {
     private final JdbcTemplate jdbcTemplate;
 
     @Override
-    @Cacheable(value = "aiSearch", key = "{#query, #limit, #categoryId}")
-    public AISearchResponse search(String query, int limit, Long categoryId) {
+    @Cacheable(value = "aiSearch", key = "{#query, #limit, #categoryId, #sellerId}")
+    public AISearchResponse search(String query, int limit, Long categoryId, UUID sellerId) {
         if (query == null || query.trim().length() < 2) {
             throw new IllegalArgumentException("Query must be at least 2 characters");
         }
@@ -46,7 +47,9 @@ public class AISearchServiceImpl implements AISearchService {
         // reads the setting at access-method init, before any CTE or WHERE eval.
         jdbcTemplate.execute("SET LOCAL ivfflat.probes = 10");
 
-        List<Object[]> rows = productRepository.findIdsBySemanticSimilarity(vectorLiteral, categoryId, limit);
+        List<Object[]> rows = (sellerId != null)
+                ? productRepository.findIdsBySemanticSimilarityBySeller(vectorLiteral, sellerId, categoryId, limit)
+                : productRepository.findIdsBySemanticSimilarity(vectorLiteral, categoryId, limit);
         List<Long> ids = rows.stream().map(r -> ((Number) r[0]).longValue()).toList();
         List<Double> scores = rows.stream().map(r -> ((Number) r[1]).doubleValue()).toList();
 

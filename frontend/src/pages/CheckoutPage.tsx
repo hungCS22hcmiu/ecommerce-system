@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useCart } from '@/features/cart/useCart'
 import { useCreateOrder } from '@/features/orders/useOrders'
 import { authApi } from '@/features/auth/authApi'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils'
 import type { ShippingAddress } from '@/types/order'
+import type { CartItem } from '@/types/cart'
 import type { Address } from '@/types/auth'
 
 const EMPTY_ADDR: ShippingAddress = {
@@ -28,6 +29,7 @@ function addressToShipping(a: Address): ShippingAddress {
 
 export function CheckoutPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { data: cartData } = useCart()
   const createOrder = useCreateOrder()
   const [address, setAddress] = useState<ShippingAddress>(EMPTY_ADDR)
@@ -35,7 +37,9 @@ export function CheckoutPage() {
   const [selectedSaved, setSelectedSaved] = useState<string | null>(null)
 
   const cart = cartData?.data
-  const items = cart?.items ?? []
+  // Items come from router state (per-seller group) or fall back to full cart
+  const selectedItems: CartItem[] = location.state?.items ?? cart?.items ?? []
+  const groupTotal = selectedItems.reduce((sum, i) => sum + i.subtotal, 0)
 
   useEffect(() => {
     authApi.getProfile().then((res) => {
@@ -61,10 +65,10 @@ export function CheckoutPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!items.length) return
+    if (!selectedItems.length) return
 
     const result = await createOrder.mutateAsync({
-      items: items.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
+      items: selectedItems.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
       shippingAddress: address,
     })
 
@@ -154,7 +158,7 @@ export function CheckoutPage() {
               <h2 className="font-semibold text-fg-base text-sm">Order Summary</h2>
 
               <div className="space-y-2 max-h-48 overflow-y-auto">
-                {items.map((item) => (
+                {selectedItems.map((item) => (
                   <div key={item.product_id} className="flex justify-between text-xs">
                     <span className="text-fg-muted truncate pr-2">
                       {item.product_name} × {item.quantity}
@@ -174,7 +178,7 @@ export function CheckoutPage() {
                 <div className="flex justify-between">
                   <span className="text-fg-base font-semibold text-sm">Total</span>
                   <span className="font-mono text-accent font-semibold">
-                    {formatCurrency(cart?.total ?? 0)}
+                    {formatCurrency(groupTotal)}
                   </span>
                 </div>
               </div>
@@ -187,6 +191,9 @@ export function CheckoutPage() {
                     if (code?.code === 'INSUFFICIENT_STOCK') {
                       return `Out of stock: ${code.message ?? 'one or more items exceed available stock. Please update your cart.'}`
                     }
+                    if (code?.code === 'BAD_REQUEST') {
+                      return code.message ?? 'Failed to place order. Please try again.'
+                    }
                     return 'Failed to place order. Please try again.'
                   })()}
                 </p>
@@ -195,7 +202,7 @@ export function CheckoutPage() {
               <Button
                 type="submit"
                 className="w-full"
-                disabled={!isValid || createOrder.isPending || items.length === 0}
+                disabled={!isValid || createOrder.isPending || selectedItems.length === 0}
               >
                 {createOrder.isPending ? 'Placing Order…' : 'Place Order →'}
               </Button>

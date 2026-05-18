@@ -28,7 +28,12 @@ function ProductRow({
     <div>
       <div className="grid grid-cols-[1fr_7rem_7rem_6rem_7rem_10rem] gap-4 px-5 py-4 border-b border-surface-border last:border-0 items-center">
         <div>
-          <p className="text-sm font-medium text-fg-base">{product.name}</p>
+          <Link
+            to={`/products/${product.id}`}
+            className="text-sm font-medium text-fg-base hover:text-accent transition-colors"
+          >
+            {product.name}
+          </Link>
           <p className="text-xs text-fg-subtle mt-0.5">ID: {product.id} · {formatDate(product.createdAt)}</p>
         </div>
         <span className="text-sm font-mono text-fg-base text-right">
@@ -79,7 +84,7 @@ export function SellerDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [idSearch, setIdSearch] = useState('')
-  const [sort, setSort] = useState<'default' | 'mostSold'>('default')
+  const [sort, setSort] = useState<'default' | 'mostSold' | 'highestRated'>('default')
 
   const userId = useAuthStore((s) => s.userId)
   const urlPage = Number(searchParams.get('page') ?? '1')
@@ -93,7 +98,8 @@ export function SellerDashboardPage() {
       status: status || undefined,
       page: apiPage,
       size: 20,
-      sort: sort === 'mostSold' ? 'stockReserved,DESC' : undefined,
+      sort: sort === 'mostSold' ? 'stockReserved,DESC' : sort === 'highestRated' ? 'avgRating,DESC' : undefined,
+      ratedOnly: sort === 'highestRated' ? true : undefined,
     },
     { enabled: !isIdSearch }
   )
@@ -167,9 +173,16 @@ export function SellerDashboardPage() {
               <button
                 type="button"
                 onClick={() => setSort('mostSold')}
-                className={`px-3 h-9 text-sm transition-colors ${sort === 'mostSold' ? 'bg-accent text-white' : 'bg-surface-overlay text-fg-muted hover:text-fg-base'}`}
+                className={`px-3 h-9 text-sm border-l border-surface-border transition-colors ${sort === 'mostSold' ? 'bg-accent text-white' : 'bg-surface-overlay text-fg-muted hover:text-fg-base'}`}
               >
                 Most Sold
+              </button>
+              <button
+                type="button"
+                onClick={() => setSort('highestRated')}
+                className={`px-3 h-9 text-sm border-l border-surface-border transition-colors ${sort === 'highestRated' ? 'bg-accent text-white' : 'bg-surface-overlay text-fg-muted hover:text-fg-base'}`}
+              >
+                Highest Rated
               </button>
             </div>
 
@@ -233,10 +246,16 @@ export function SellerDashboardPage() {
 
           {!isLoading && !isError && products.length === 0 && (
             <EmptyState
-              title="No products found"
-              description={status ? `No ${status.toLowerCase()} products.` : 'Create your first product to start selling.'}
+              title={sort === 'highestRated' ? 'No rated products yet' : 'No products found'}
+              description={
+                sort === 'highestRated'
+                  ? 'None of your products have been rated by customers yet.'
+                  : status
+                    ? `No ${status.toLowerCase()} products.`
+                    : 'Create your first product to start selling.'
+              }
               action={
-                !status ? (
+                !status && sort !== 'highestRated' ? (
                   <Link to="/seller/products/new">
                     <Button>Create Product</Button>
                   </Link>
