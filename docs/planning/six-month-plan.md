@@ -512,6 +512,14 @@ This phase is **not about becoming a frontend engineer**. It is about building e
 - ✅ **Bonus:** Dark/light theme toggle
 - ✅ **Bonus:** Email verification page
 - ✅ **Bonus:** Seller product management (list/create/edit/delete + category combobox)
+- ✅ **Bonus:** Reviews and ratings system (multi-item dialog, star rating, existing-review pre-fill)
+- ✅ **Bonus:** In-app notification bell (click-to-navigate: order → `/orders/:id`, review → `/products/:id`)
+- ✅ **Bonus:** Category browse pages and category-filtered product listing
+- ✅ **Bonus:** Public seller shop page (`/sellers/:id`)
+- ✅ **Bonus:** Seller orders portal (filter by status, ship/deliver actions)
+- ✅ **Bonus:** "Highest Rated" sort on seller dashboard (filters products with ≥1 review)
+- ✅ **Bonus:** Product images shown in cart; seller email grouping headers
+- ✅ **Bonus:** Product thumbnails and clickable names in order detail page
 
 ### Tech Stack (Actual)
 
@@ -853,6 +861,67 @@ Manual `useEffect` for data fetching requires you to handle: loading state, erro
 
 ---
 
+## Phase 6 Bonus: Post-Plan Feature Additions ✅ DONE
+
+These features were built after completing the core 6-month plan, driven by making the system more complete and demo-ready.
+
+### Reviews and Ratings System
+
+**Backend (product-service):**
+- Flyway `V4__add_reviews_and_ratings.sql` — `reviews` table with `UNIQUE(user_id, order_item_id)` (one review per order item); `avg_rating DECIMAL(3,2)` and `rating_count INT` denormalized on `products`
+- `ReviewService` — create (validates order item ownership via product-service client), update, delete; recalculates `avg_rating` and `rating_count` synchronously on every mutation; cache evicts product on rating change
+- `ReviewController` — `POST/GET /products/{id}/reviews`, `PUT/DELETE /reviews/{id}`, `GET /products/{id}/my-review?orderItemId=`
+- Search ranking: AI search and keyword search already incorporate `avg_rating` in result ordering
+
+**Frontend:**
+- `ReviewDialog` — multi-item panel showing all order items simultaneously. Per-item `{ rating, comment }` state array. Existing reviews pre-populated via `useMyReviewByOrderItem`. Single Submit loops through rated items, calls create or update. Modal scrollable, `max-w-2xl`.
+- `StarRating` component — interactive + display modes
+- Review display on `ProductDetailPage` — paginated, shows star distribution
+
+### In-App Notification System
+
+**Backend (order-service):**
+- `Notification` entity: `userId`, `orderId` (nullable), `productId` (nullable), `title`, `body`, `isRead`
+- V3 migration: `notifications` table; V4 adds `product_id BIGINT` nullable
+- Notifications created: on order placed (→ seller), on payment confirmed/failed (→ buyer)
+- `POST /notifications/internal/review` — internal endpoint, blocked at nginx. Called by product-service (fire-and-forget) when a customer reviews a product. Sets `productId`, not `orderId`.
+
+**Backend (product-service):**
+- `OrderServiceClient.notifySellerReview()` — fire-and-forget HTTP POST to order-service internal endpoint. Catches all exceptions; logs WARN only; never surfaces to review creation caller.
+
+**Frontend:**
+- `NotificationBell` — bell icon in Navbar with unread count badge. Dropdown list. Each notification is a `<button>`: click navigates to `/orders/:id` if `orderId` set, `/products/:id` if `productId` set. Hover styling.
+
+### Category Browsing
+
+- `CategoryBrowsePage` — grid of all categories with icons
+- `CategoryProductsPage` — products filtered by category slug, paginated
+
+### Public Seller Shop
+
+- `SellerShopPage` (`/sellers/:id`) — public profile (name, joined date from user-service) + seller's ACTIVE products grid
+- user-service: `GET /users/:id/seller-profile` endpoint (no auth required, returns public fields only)
+
+### Seller Orders Portal
+
+- `SellerOrdersPage` — order list scoped to the seller; filter by status
+- `SellerOrderDetailPage` — full order detail with Ship / Deliver actions
+- order-service: `GET /orders?sellerId=` list + `PUT /orders/:id/ship` and `/deliver` (already existed, now wired to UI)
+- Bug fixed: `orders.status` was PostgreSQL enum — Hibernate 6 sends VARCHAR parameters, no matching operator. Converted to `VARCHAR(50)` via V6 migration.
+
+### Seller My Products Enhancements
+
+- "Highest Rated" sort button — `ratedOnly=true` param filters `rating_count > 0` in Spring Data derived query (`findBySellerIdAndRatingCountGreaterThan`). Zero-rating products excluded. Custom empty state when none are rated.
+- Product names are clickable links to the public product page
+
+### Cart and Order Detail Enhancements
+
+- Cart items show product images (fetched from product-service)
+- Cart groups items by seller with seller email header
+- Order detail shows product thumbnails and clickable product names
+
+---
+
 ## Phase 7: AWS Deployment + CI/CD + Interview Prep (Month 7 — Weeks 25–30)
 
 ### Month 7 Goals
@@ -1002,6 +1071,7 @@ Manual `useEffect` for data fetching requires you to handle: loading state, erro
 | End of Month 4 | ✅ Tested + hardened | Production-quality code, not just "it works on my machine" |
 | **End of Week 20** | ✅ **React frontend live** | **System is demoable in a browser — no curl required** |
 | **End of Month 6** | ✅ **AI search working** | **Semantic product search with pgvector + ai-service sidecar. Write-through refresh on every product update.** |
+| **Post-plan bonus** | ✅ **Full marketplace features** | **Reviews/ratings, notifications, seller orders, category browsing, public seller shop, cart enhancements** |
 | End of Month 7 | Deployed + interview-ready | Live system you can demo, stories you can tell |
 
 ---

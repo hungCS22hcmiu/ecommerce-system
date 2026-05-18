@@ -15,6 +15,7 @@ The `cart-service` is a Go microservice (Gin + GORM) that manages **shopping car
 - Circuit-breaking product-service calls: 5 consecutive failures → 30s OPEN state, fast-fail without waiting
 - Background goroutine syncing Redis → PostgreSQL every 30 seconds for durability
 - JWT validation using the same RSA public key issued by user-service
+- Snapshot of product name, unit price, and seller context at add-time — frontend uses this to group items by seller and display cart totals without calling product-service at render time
 
 ---
 
@@ -22,7 +23,7 @@ The `cart-service` is a Go microservice (Gin + GORM) that manages **shopping car
 
 ### In this project
 - Carts are written on nearly every user action (add, update, remove, clear). Hitting Postgres directly on every operation would be slow and would create unnecessary write load on the shared DB. Redis Hash operations are sub-millisecond and O(1).
-- Price and product name are snapshotted into Redis at the moment of `AddItem`. UpdateItem skips the product-service call entirely — the price doesn't change retroactively for items already in a cart, just as a real price tag doesn't change while it's in your basket.
+- Price, product name, and seller ID are snapshotted into Redis at the moment of `AddItem`. UpdateItem skips the product-service call entirely — the price doesn't change retroactively for items already in a cart, just as a real price tag doesn't change while it's in your basket. The frontend uses the snapshotted seller ID to group cart items by seller, and separately fetches product images from product-service for display — this extra rendering data is fetched by the browser, not by cart-service itself.
 - The circuit breaker ensures cart reads (`GetCart`, `UpdateItem`, `RemoveItem`) keep working even when product-service is down. Only `AddItem` is blocked during an outage, because that's the only operation that actually needs product validation.
 
 ### In real-world systems
@@ -303,6 +304,8 @@ Five failures (not 1) avoids false-positives from transient network blips. Thirt
 ### Q: Why does AddItem snapshot the price at time of addition instead of fetching the current price at checkout?
 
 **A:** This is a deliberate product design decision, not a technical constraint. Showing users the price they saw when they added the item avoids a jarring experience where a price changes between browsing and checkout. It also decouples the cart from the product-service at checkout time — the cart doesn't need to make N HTTP calls for N items. The trade-off: the cart may show a stale price if a seller changes the price later. Order-service fetches the live price from product-service at order creation to reconcile any difference.
+
+Note: the frontend also fetches product images for cart display. These are NOT stored in Redis — the image is fetched from product-service by the browser when rendering the cart page. This separation keeps the cart's Redis payload small (just name, quantity, price, sellerId) and lets the product image cache (30-min TTL in Redis on the product-service side) do its job independently.
 
 ### Q: What happens if the background sync goroutine crashes?
 

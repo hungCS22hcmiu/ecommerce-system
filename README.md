@@ -1,15 +1,15 @@
 # E-Commerce Microservices Platform
 
-Distributed e-commerce backend built with Go, Java/Spring Boot, and Python. Six services communicate over synchronous REST and an asynchronous Kafka choreography saga, fronted by an Nginx gateway and a React 19 SPA. Includes semantic product search powered by pgvector and a sentence-transformer embedding sidecar.
+Distributed e-commerce backend built with Go, Java/Spring Boot, and Python. Six services communicate over synchronous REST and an asynchronous Kafka choreography saga, fronted by an Nginx gateway and a React 19 SPA. Includes semantic product search powered by pgvector, a reviews/ratings system, in-app notifications, and a seller management portal.
 
 ## Service Map
 
 | Service | Language | Port | Key Pattern |
 |---|---|---|---|
 | user-service | Go (Gin + GORM) | 8001 | Pessimistic lock · Redis sessions · RS256 JWT |
-| product-service | Java/Spring Boot | 8081 | Optimistic lock · Redis cache-aside · pgvector AI search |
+| product-service | Java/Spring Boot | 8081 | Optimistic lock · Redis cache-aside · pgvector AI search · reviews/ratings |
 | cart-service | Go (Gin + GORM) | 8002 | Redis-first · WATCH/MULTI/EXEC |
-| order-service | Java/Spring Boot | 8082 | Pessimistic lock · Kafka publisher |
+| order-service | Java/Spring Boot | 8082 | Pessimistic lock · Kafka publisher · notifications |
 | payment-service | Go (Gin) | 8003 | Idempotency key · Kafka saga · DLQ |
 | ai-service | Python (FastAPI) | 8000 | sentence-transformers sidecar · `POST /embed` |
 | frontend | React 19 + Vite → Nginx | 3001 | TanStack Query · Zustand · JWT interceptor |
@@ -45,16 +45,17 @@ Sample credentials (from `script/sample_users.sql`):
 ## Architecture
 
 ```
-Browser → Nginx :80 → user-service   :8001  (auth, profiles)
-                    → product-service:8081  (catalog, inventory, AI search)
+Browser → Nginx :80 → user-service   :8001  (auth, profiles, public seller profile)
+                    → product-service:8081  (catalog, inventory, AI search, reviews)
                     → cart-service   :8002  (Redis-first cart)
-                    → order-service  :8082  (orders, Kafka publisher)
+                    → order-service  :8082  (orders, notifications, Kafka publisher)
                     → payment-service:8003  (Kafka consumer, saga)
 
-product-service ──REST──▶  ai-service:8000  (embed query / write-through re-embed)
+product-service ──REST──▶  ai-service:8000          (embed query / write-through re-embed)
+product-service ──REST──▶  order-service:8082        (review notification, fire-and-forget)
 
-order-service   ──kafka──▶  orders.created          ──▶  payment-service
-payment-service ──kafka──▶  payments.completed/failed ──▶  order-service
+order-service   ──kafka──▶  orders.created            ──▶  payment-service
+payment-service ──kafka──▶  payments.completed/failed  ──▶  order-service
 ```
 
 **Databases:** Single PostgreSQL instance, 5 logical databases (`ecommerce_users/products/carts/orders/payments`). Schemas auto-applied from `script/init-databases.sql` at container start.
@@ -114,6 +115,28 @@ bash script/loadtest-orders.sh   # 100 orders at 10 concurrent, asserts 0 PENDIN
 bash script/perf-baseline.sh     # single-threaded latency baseline
 ```
 
+## Pages & Routes
+
+| Route | Description | Auth |
+|---|---|---|
+| `/` | Home — featured products | No |
+| `/products` | Product list with keyword + AI search, pagination | No |
+| `/products/:id` | Product detail — gallery, reviews, ratings | No |
+| `/categories` | Category browse grid | No |
+| `/categories/:slug` | Products filtered by category | No |
+| `/sellers/:id` | Public seller shop page | No |
+| `/cart` | Cart with item images and seller grouping | Yes |
+| `/checkout` | Checkout — address selection, order summary | Yes |
+| `/orders/:id/confirmation` | Order confirmation + payment polling | Yes |
+| `/orders` | Order history | Yes |
+| `/orders/:id` | Order detail — items, timeline, product thumbnails | Yes |
+| `/profile` | Profile and address management | Yes |
+| `/seller/products` | My Products — list, sort, filter, "Highest Rated" | Seller |
+| `/seller/products/new` | Create product | Seller |
+| `/seller/products/:id/edit` | Edit product | Seller |
+| `/seller/orders` | Orders received — filter by status | Seller |
+| `/seller/orders/:id` | Seller order detail | Seller |
+
 ## Documentation
 
 | Document | Description |
@@ -128,17 +151,19 @@ bash script/perf-baseline.sh     # single-threaded latency baseline
 | [`docs/adrs/locking-strategy.md`](docs/adrs/locking-strategy.md) | Concurrency strategy rationale per service |
 | [`docs/adrs/saga-resilience.md`](docs/adrs/saga-resilience.md) | Kafka saga and DLQ design decisions |
 | [`cart-service/README.md`](cart-service/README.md) | cart-service deep dive (Redis WATCH, circuit breaker, sync worker) |
+| [`order-service/README.md`](order-service/README.md) | order-service deep dive (state machine, notifications, seller view) |
 | [`ai-service/README.md`](ai-service/README.md) | ai-service deep dive (model, endpoints, backfill script) |
 | [`api/openapi.yaml`](api/openapi.yaml) | Full REST API contract |
 | [`CLAUDE.md`](CLAUDE.md) | AI assistant context (service internals, key files, commands) |
 
 ## Environment Variables
 
-Key variables (all 43 documented in [`.env.example`](.env.example)):
+Key variables (all documented in [`.env.example`](.env.example)):
 
 | Variable | Default | Used by |
 |---|---|---|
 | `PRODUCT_SERVICE_URL` | `http://product-service:8081` | cart-service, order-service |
+| `ORDER_SERVICE_URL` | `http://order-service:8082` | product-service (review notifications) |
 | `AI_SERVICE_URL` | `http://ai-service:8000` | product-service |
 | `KAFKA_BROKERS` | `kafka:29092` | order-service, payment-service |
 | `JWT_PRIVATE_KEY_PATH` | `./keys/private.pem` | user-service |
