@@ -13,3 +13,8 @@ server
 # general
 bin/
 build/
+
+# Test run artifacts (regeneratable via script/test/phaseN_run.sh)
+script/k6/results/
+frontend/test-results/
+frontend/playwright-report/

@@ -1,6 +1,6 @@
 # product-service
 
-Java 21 / Spring Boot 3.5 microservice for product catalog and inventory management. Part of a 5-service e-commerce platform.
+Java 21 / Spring Boot 3.5 microservice for product catalog, inventory management, reviews/ratings, and AI-powered semantic search. Part of a 5-service e-commerce platform.
 
 - **Port:** 8081
 - **Database:** PostgreSQL (`ecommerce_products`)
@@ -44,61 +44,52 @@ All responses follow the envelope format:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/` | `X-Seller-Id` header (UUID) | Create product → 201 |
-| `GET` | `/{id}` | None | Get product by ID (ACTIVE only) |
+| `GET` | `/{id}` | None | Get product by ID |
 | `GET` | `/` | None | List products — paginated |
-| `GET` | `/search?q=` | None | Full-text search — paginated |
+| `GET` | `/search?q=` | None | Full-text keyword search — paginated |
+| `GET` | `/ai-search?q=&limit=` | None | pgvector semantic search |
 | `PUT` | `/{id}` | `X-Seller-Id` header (UUID) | Update product (partial) |
 | `DELETE` | `/{id}` | `X-Seller-Id` header (UUID) | Soft-delete → 204 |
 
-**List query params:** `categoryId` (Long), `status` (ACTIVE/INACTIVE/DELETED), standard `page`/`size`/`sort`  
-**Default page:** size=20, sort=createdAt DESC  
+**List query params:** `categoryId` (Long), `sellerId` (UUID), `status` (ACTIVE/INACTIVE/DELETED), `ratedOnly` (boolean — filters `rating_count > 0`), standard `page`/`size`/`sort`.
+
+`ratedOnly=true` is used by the seller "Highest Rated" view — returns only the seller's products that have at least one review, sorted by `avgRating DESC`.
+
 **Missing `X-Seller-Id`** on write endpoints → 400. Wrong seller on owned product → 403.
-
-#### Create / Update request body
-
-```json
-{
-  "name": "Widget Pro",
-  "description": "Optional",
-  "price": 49.99,
-  "categoryId": 3,
-  "stockQuantity": 100,
-  "images": [
-    { "url": "https://...", "altText": "front view", "sortOrder": 0 }
-  ]
-}
-```
-
-All `UpdateProductRequest` fields are optional (partial update). `images` array replaces all existing images when provided.
 
 ### Inventory — `/api/v1/inventory`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/{productId}/reserve` | Reserve stock for an order |
-| `POST` | `/{productId}/release` | Release previously reserved stock |
+| `POST` | `/{productId}/reserve` | Reserve stock for an order (internal, nginx blocked externally) |
+| `POST` | `/{productId}/release` | Release previously reserved stock (internal) |
 | `GET` | `/{productId}` | Get current stock levels |
 
-**Reserve / Release body:**
-```json
-{ "quantity": 5, "referenceId": "order-abc123" }
-```
+### Categories — `/api/v1/categories`
 
-**Stock response:**
-```json
-{ "productId": 1, "stockQuantity": 100, "stockReserved": 10, "availableStock": 90 }
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | List all categories (hierarchical) |
+| `GET` | `/{id}` | Get category by ID |
+| `GET` | `/slug/{slug}` | Get category by slug |
 
-### Error codes
+### Reviews — `/api/v1/products/{productId}/reviews`
 
-| Code | HTTP | Trigger |
-|------|------|---------|
-| `PRODUCT_NOT_FOUND` | 404 | ID not found or product is DELETED |
-| `INSUFFICIENT_STOCK` | 409 | Reserve quantity > available |
-| `ACCESS_DENIED` | 403 | Seller ID doesn't own the product |
-| `CONCURRENT_MODIFICATION` | 409 | Optimistic lock retries exhausted |
-| `VALIDATION_ERROR` | 400 | Bean validation failure |
-| `BAD_REQUEST` | 400 | Missing header, type mismatch, release > reserved |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/products/{id}/reviews` | Bearer JWT | Create a review (one per order item) |
+| `GET` | `/products/{id}/reviews` | None | List reviews for a product (paginated) |
+| `GET` | `/products/{id}/my-review?orderItemId=` | Bearer JWT | Get the current user's review for an order item |
+| `PUT` | `/reviews/{reviewId}` | Bearer JWT | Update own review |
+| `DELETE` | `/reviews/{reviewId}` | Bearer JWT | Delete own review |
+
+On review creation: `avg_rating` and `rating_count` on the product are recalculated immediately. Then `orderServiceClient.notifySellerReview()` is called fire-and-forget to notify the seller (logged WARN on failure, never surfaces to caller).
+
+### Seller Public Profile — `/api/v1/sellers`
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/{sellerId}/products` | None | Public product listing for a seller's shop page |
 
 ---
 
@@ -115,6 +106,8 @@ products
   ├─ status: ACTIVE | INACTIVE | DELETED
   ├─ stock_quantity  (total on hand)
   ├─ stock_reserved  (held by pending orders)
+  ├─ avg_rating DECIMAL(3,2)   (recalculated on every review create/update/delete)
+  ├─ rating_count INT           (total number of reviews)
   └─ version         (optimistic lock counter)
 
 product_images
@@ -122,20 +115,23 @@ product_images
 
 stock_movements  (append-only audit log)
   └─ product_id, type: IN|OUT|RESERVE|RELEASE, quantity, reference_id, created_at
+
+reviews
+  ├─ id (UUID), product_id → products
+  ├─ user_id (UUID), order_item_id (UUID)  ← one review per order item enforced
+  ├─ rating (1–5), comment (nullable)
+  └─ created_at / updated_at
+
+products.embedding  vector(384)   ← pgvector, IVFFLAT index (cosine, lists=100)
 ```
 
-**Stock model:** `availableStock = stockQuantity - stockReserved`  
-Reserving does not decrement `stockQuantity` — it increments `stockReserved`. This allows order cancellations to simply release the reservation without touching inventory counts.
+**Stock model:** `availableStock = stockQuantity - stockReserved`. Reserving increments `stockReserved`; cancellations release the reservation without touching `stockQuantity`.
 
-**Soft delete:** `DELETE` sets `status = DELETED`. Products are never hard-deleted; foreign keys stay valid and history is preserved.
-
-**Indexes:** GIN index on `to_tsvector('english', name || description)` for full-text search. Partial index on `(category_id, created_at DESC) WHERE status='ACTIVE'` for efficient category listings.
+**Soft delete:** `DELETE` sets `status = DELETED`. History preserved; FK constraints stay valid.
 
 ---
 
 ## Concurrency — Inventory
-
-Stock operations are the contention point. Two concurrent reservations for the last 5 units must not both succeed.
 
 ### Optimistic locking + retry
 
@@ -154,64 +150,46 @@ Thread B writes: version=0 but DB has v1  → ObjectOptimisticLockingFailureExce
 - After 3 failed retries → 409 CONCURRENT_MODIFICATION
 - Proven by `InventoryConcurrencyTest`: 10 threads competing for 5 units — exactly 5 succeed, no lost updates
 
-**Why optimistic (not pessimistic)?** Product reads far outnumber writes. `SELECT FOR UPDATE` would block every concurrent reader during a stock change. Optimistic locking adds zero overhead on reads.
+**Why optimistic (not pessimistic)?** Product reads far outnumber writes. `SELECT FOR UPDATE` blocks every reader during a stock change. Optimistic locking adds zero overhead on reads.
 
 ---
 
 ## Caching — Redis Cache-Aside
 
-### Cache configuration
+| Cache | TTL | What's stored |
+|-------|-----|---------------|
+| `product` | 30 min | `ProductResponse` (full detail) |
+| `productList` | 3 min | `Page<ProductSummaryResponse>` |
+| `aiSearch` | 1 min | `AISearchResponse` (skipped on `AIServiceException`) |
 
-| Cache | TTL | Key | What's stored |
-|-------|-----|-----|---------------|
-| `product` | 30 min | `product-service::product::{id}` | `ProductResponse` (full detail) |
-| `productList` | 3 min | `product-service::productList::{params}` | `Page<ProductSummaryResponse>` |
-
-- Values serialized as JSON (Jackson + `JavaTimeModule` — handles `OffsetDateTime`, `UUID`, `BigDecimal`)
-- Null values not cached (`disableCachingNullValues`) — `ProductNotFoundException` never writes to Redis
-- Key prefix `product-service::` prevents collisions with other services sharing the same Redis
-
-### Cache operations
-
-| Operation | Annotation | Effect |
-|-----------|-----------|--------|
-| `getProduct` | `@Cacheable("product")` | Miss → DB + cache; Hit → Redis only |
-| `updateProduct` | `@CachePut("product")` + `@CacheEvict("productList")` | Refresh product key immediately; clear all list keys |
-| `deleteProduct` | `@CacheEvict` both caches | Remove product key; clear all list keys |
-| `createProduct` | `@CacheEvict("productList", allEntries=true)` | Clear all list keys (product count changed) |
-| `listProducts` / `searchProducts` | `@Cacheable("productList")` | Short TTL (3 min) handles staleness |
+- Values serialized as JSON (Jackson + `JavaTimeModule`)
+- Null values not cached — `ProductNotFoundException` never writes to Redis
+- Key prefix `product-service::` prevents Redis namespace collisions
 
 ### Startup cache warming
 
-`CacheWarmupService` fires on `ApplicationReadyEvent` (async, non-blocking):
-1. Queries the 100 most recently updated ACTIVE products
-2. Calls `productService.getProduct(id)` for each → `@Cacheable` populates Redis
-3. Logs completion: `[CacheWarmup] Completed: 98 products cached in 245ms`
+`CacheWarmupService` fires `@Async` on `ApplicationReadyEvent`: queries the 100 most recent ACTIVE products and pre-populates the `product` cache. Non-blocking; logged on completion.
 
-Reduces cold-start latency for popular products on first requests after deploy.
+---
 
-### Cache stampede (known limitation)
+## AI Search — pgvector
 
-When `productList` TTL expires and many concurrent requests arrive simultaneously, all find a cache miss and hit the DB together. Mitigations (not implemented) include probabilistic early refresh (PER), a distributed lock around the miss path, or a Caffeine + Redis two-tier cache.
+**Flow:** query text → `EmbeddingClient.embed()` (HTTP to ai-service) → `SET LOCAL ivfflat.probes=10` → `findIdsBySemanticSimilarity(vector, limit)` → ranked `AISearchResponse{query, results, scores, mode}`.
 
-### Inspect cache in Redis
+**Write-through embedding:** `ProductEmbeddingService.scheduleEmbedding()` fires `@Async` on every `createProduct` / `updateProduct`. Concatenates `name + description + categoryName`, sends to ai-service, stores 384-dim vector in `products.embedding`. Failures logged WARN; never surface to caller. Configurable via `ai-service.write-through-enabled`.
 
-```bash
-# All cached keys
-docker exec ecommerce-redis redis-cli KEYS "product-service::*"
+**Backfill:** `docker compose run --rm ai-service python scripts/embed_products.py`
 
-# A product's cached value (human-readable JSON)
-docker exec ecommerce-redis redis-cli GET "product-service::product::1"
+---
 
-# TTL remaining (seconds)
-docker exec ecommerce-redis redis-cli TTL "product-service::product::1"
-```
+## Flyway Migrations
 
-Cache hit/miss events are logged at TRACE level (`org.springframework.cache: TRACE` in `application.yaml`):
-```
-TRACE ... No cache entry for key '1' in cache(s) [product]      ← MISS
-TRACE ... Cache entry for key '1' found in cache(s) [product]    ← HIT
-```
+| Version | File | What it does |
+|---|---|---|
+| V1 | `baseline_schema.sql` | All core tables + indexes |
+| V2 | `seed_products.sql` | 19 categories, 200 products, images |
+| V3 | `add_product_embeddings.sql` | `embedding vector(384)` + IVFFLAT index |
+| V4 | `add_reviews_and_ratings.sql` | `reviews` table + `avg_rating`/`rating_count` on products |
 
 ---
 
@@ -225,11 +203,8 @@ TRACE ... Cache entry for key '1' found in cache(s) [product]    ← HIT
 | `DB_PASSWORD` | `postgres` | DB password |
 | `REDIS_HOST` | `localhost` | Redis host |
 | `REDIS_PORT` | `6379` | Redis port |
-| `REDIS_PASSWORD` | _(empty)_ | Redis password (optional) |
-
-Flyway migrations live in `src/main/resources/db/migration/`:
-- `V1__baseline_schema.sql` — tables, indexes, PostgreSQL enums
-- `V2__seed_products.sql` — 19 categories, 200 products (3 seller IDs, images via picsum.photos)
+| `AI_SERVICE_URL` | `http://ai-service:8000` | ai-service base URL |
+| `ORDER_SERVICE_URL` | `http://order-service:8082` | For review notifications |
 
 ---
 
@@ -238,29 +213,28 @@ Flyway migrations live in `src/main/resources/db/migration/`:
 ```
 src/main/java/com/ecommerce/product_service/
 ├── config/
-│   ├── AsyncConfig.java       # Thread pool for @Async (core=5, max=20)
-│   ├── JpaConfig.java         # @EnableJpaAuditing with OffsetDateTime provider
-│   ├── RedisConfig.java       # @EnableCaching, RedisCacheManager, Jackson serializer
-│   └── RetryConfig.java       # @EnableRetry
+│   ├── AsyncConfig.java            # Thread pool for @Async (core=5, max=20)
+│   ├── JpaConfig.java              # @EnableJpaAuditing
+│   ├── RedisConfig.java            # @EnableCaching, RedisCacheManager, Jackson serializer
+│   └── RetryConfig.java            # @EnableRetry
 ├── controller/
 │   ├── HealthController.java
 │   ├── InventoryController.java
-│   └── ProductController.java
-├── dto/                       # Request / response records and classes
-├── exception/
-│   ├── GlobalExceptionHandler.java
-│   ├── InsufficientStockException.java
-│   ├── ProductAccessDeniedException.java
-│   └── ProductNotFoundException.java
-├── model/                     # JPA entities: Product, Category, ProductImage, StockMovement
-├── repository/                # Spring Data JPA interfaces
+│   ├── ProductController.java      # includes ratedOnly param
+│   ├── ReviewController.java
+│   └── CategoryController.java
+├── client/
+│   ├── EmbeddingClient.java        # HTTP to ai-service
+│   └── OrderServiceClient.java     # notifySellerReview (fire-and-forget)
+├── model/                          # Product, Category, ProductImage, StockMovement, Review
+├── repository/                     # Spring Data JPA; ratedOnly derived query methods
 └── service/
     ├── CacheWarmupService.java
-    ├── InventoryService.java (interface)
-    ├── ProductService.java    (interface)
-    └── serviceImpl/
-        ├── InventoryServiceImpl.java
-        └── ProductServiceImpl.java
+    ├── ProductEmbeddingService.java # @Async write-through embedding
+    ├── AISearchService.java / serviceImpl/AISearchServiceImpl.java
+    ├── ProductService.java / serviceImpl/ProductServiceImpl.java  (ratedOnly branching)
+    ├── InventoryService.java / serviceImpl/InventoryServiceImpl.java
+    └── ReviewService.java / serviceImpl/ReviewServiceImpl.java
 ```
 
 ---
@@ -268,24 +242,22 @@ src/main/java/com/ecommerce/product_service/
 ## Testing
 
 ```bash
-./mvnw test                                           # all 62 tests
+./mvnw test                                           # all tests
 ./mvnw test -Dtest="ProductServiceImplTest"           # unit only
-./mvnw test -Dtest="ProductCacheIntegrationTest"      # cache integration (starts Redis + Postgres containers)
-./mvnw test -Dtest="InventoryConcurrencyTest"         # concurrency (starts Postgres container)
+./mvnw test -Dtest="ProductCacheIntegrationTest"      # cache integration (Testcontainers)
+./mvnw test -Dtest="InventoryConcurrencyTest"         # concurrency (Testcontainers)
 ```
 
-| File | Type | Count | What it proves |
-|------|------|-------|----------------|
-| `ProductServiceImplTest` | Unit (Mockito) | 30 | CRUD logic, ownership checks, soft delete, mapping |
-| `InventoryServiceImplTest` | Unit (Mockito) | 9 | Stock math, movement audit, edge cases |
-| `ProductServiceCacheTest` | Unit + Spring cache | 5 | `@Cacheable`/`@CachePut`/`@CacheEvict` AOP fires correctly |
-| `ProductCacheIntegrationTest` | Integration (Testcontainers) | 15 | Real Redis: key format, TTL, serialization round-trip, invalidation |
-| `InventoryConcurrencyTest` | Integration (Testcontainers) | 2 | Lost-update prevention: 10 threads, 5 units — exactly 5 succeed |
-| `ProductServiceApplicationTests` | Smoke | 1 | Spring context loads |
-
-Integration tests spin up real PostgreSQL and Redis containers automatically — no local setup needed.
-
-Test profile (`application-test.yaml`) uses an in-memory cache by default. `ProductCacheIntegrationTest` overrides this via `@DynamicPropertySource` to connect to the Redis container.
+| File | Type | What it proves |
+|------|------|----------------|
+| `ProductServiceImplTest` | Unit (Mockito) | CRUD logic, ownership checks, soft delete, mapping |
+| `InventoryServiceImplTest` | Unit (Mockito) | Stock math, movement audit, edge cases |
+| `ProductServiceCacheTest` | Unit + Spring cache | `@Cacheable`/`@CachePut`/`@CacheEvict` AOP fires correctly |
+| `ProductCacheIntegrationTest` | Integration (Testcontainers) | Real Redis: key format, TTL, serialization, invalidation |
+| `InventoryConcurrencyTest` | Integration (Testcontainers) | 10 threads, 5 units — exactly 5 succeed (lost-update proof) |
+| `AISearchServiceTest` | Unit (Mockito) | AI search logic, fallback, cache skip on exception |
+| `AISearchIntegrationTest` | Integration (Testcontainers) | Real pgvector similarity search |
+| `AISearchFallbackTest` | Unit | Circuit-breaker / unavailable ai-service scenarios |
 
 ---
 
@@ -296,7 +268,7 @@ Test profile (`application-test.yaml`) uses an in-memory cache by default. `Prod
 | Optimistic locking, not pessimistic | Catalog is read-heavy; `SELECT FOR UPDATE` blocks readers. @Version adds zero overhead on reads. |
 | Soft delete | Preserves audit history; FK constraints stay valid; reversible. |
 | Cache-aside, not write-through | Redis failure doesn't break writes; app controls cache population timing. |
-| productList TTL = 3 min | Pagination key space is huge (every page/size/sort combo). Short TTL prevents memory explosion. |
-| Async cache warmup | Startup latency unchanged; pre-warmed cache is a best-effort optimization, not a hard dependency. |
-| `stockQuantity` + `stockReserved` dual fields | Separates "total on hand" from "committed to orders"; cancellations release reservation without touching quantity. |
-| `X-Seller-Id` in header | Simpler than JWT parsing in this service; gateway pre-validates JWT and forwards the seller ID. |
+| `productList` TTL = 3 min | Pagination key space is huge. Short TTL prevents memory explosion. |
+| `avg_rating` denormalized on products | Avoids aggregate query on every product listing. Recalculated synchronously on review mutation. |
+| Review notification fire-and-forget | Seller notification is best-effort; review creation should never fail because the notification service is down. |
+| `ratedOnly` boolean param | Spring Data derived queries handle `ratingCount > 0` cleanly; the Pageable sort alone cannot exclude zero-rating rows. |

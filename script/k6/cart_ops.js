@@ -1,60 +1,45 @@
-// k6 load test — cart mutations (50 VUs, shared user token)
-// Run: k6 run script/k6/cart_ops.js
-// Requires: stack running with seeded users (script/sample_users.sql)
-//
-// Expected behaviour: 409 responses are normal under concurrent load — the
-// cart uses Redis WATCH/MULTI/EXEC (optimistic locking). They are marked as
-// expected statuses so they don't inflate http_req_failed.
-import http from 'k6/http';
-import { check, sleep } from 'k6';
+// Phase 2.A.2 — POST /api/v1/cart/items at 500 RPS for 60s.
+// Target: testing_target.md §1 — P95 < 40ms, throughput ≥ 500 RPS.
+// 409 = Redis WATCH/MULTI/EXEC conflict (cart uses optimistic concurrency); marked expected.
 
-const BASE     = __ENV.BASE_URL  || 'http://localhost';
-const AUTH_URL = __ENV.AUTH_URL  || BASE;  // user-service; override when bypassing Nginx
+import http from 'k6/http';
+import { check } from 'k6';
+import { login } from './lib/auth.js';
+
+const AUTH_URL = __ENV.AUTH_URL || 'http://localhost:8001';
+const CART_URL = __ENV.CART_URL || 'http://localhost:8002';
+const PRODUCT_ID = parseInt(__ENV.PRODUCT_ID || '1', 10);
 
 export const options = {
-  stages: [
-    { duration: '30s', target: 50 },   // ramp up
-    { duration: '90s', target: 50 },   // hold
-    { duration: '30s', target: 0  },   // ramp down
-  ],
+  scenarios: {
+    cart: {
+      executor: 'constant-arrival-rate',
+      rate: parseInt(__ENV.RATE || '500', 10),
+      timeUnit: '1s',
+      duration: __ENV.DURATION || '60s',
+      preAllocatedVUs: parseInt(__ENV.PRE_VUS || '80', 10),
+      maxVUs: parseInt(__ENV.MAX_VUS || '400', 10),
+    },
+  },
   thresholds: {
-    http_req_duration: ['p(95)<1000'],
-    http_req_failed:   ['rate<0.05'],  // 409 marked expected below; only real errors counted
+    'http_req_duration{expected_response:true}': ['p(95)<40'],
+    http_req_failed: ['rate<0.05'],
+    checks: ['rate>0.95'],
   },
 };
 
 export function setup() {
-  const res = http.post(
-    `${AUTH_URL}/api/v1/auth/login`,
-    JSON.stringify({ email: 'customer@example.com', password: 'Customer@123' }),
-    { headers: { 'Content-Type': 'application/json' } },
-  );
-  if (res.status !== 200) {
-    throw new Error(`Login failed: ${res.status} ${res.body}`);
-  }
-  const token = res.json('data.access_token');
-  if (!token) throw new Error('No access_token in login response');
-  return { token };
+  return login(AUTH_URL, 'customer@example.com', 'Customer@123');
 }
 
 export default function ({ token }) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`,
-  };
-
-  // Add item to cart — 409 marked as expected so it doesn't inflate http_req_failed
-  const addRes = http.post(
-    `${BASE}/api/v1/cart/items`,
-    JSON.stringify({ product_id: 1, quantity: 1 }),
-    { headers, responseCallback: http.expectedStatuses(200, 201, 409) },
+  const res = http.post(
+    `${CART_URL}/api/v1/cart/items`,
+    JSON.stringify({ product_id: PRODUCT_ID, quantity: 1 }),
+    {
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      responseCallback: http.expectedStatuses(200, 201, 409),
+    },
   );
-  // 200/201 = success, 409 = Redis WATCH conflict (concurrent update, expected)
-  check(addRes, { 'add item ok': (r) => r.status === 200 || r.status === 201 || r.status === 409 });
-
-  // Read the cart back
-  const getRes = http.get(`${BASE}/api/v1/cart`, { headers });
-  check(getRes, { 'get cart 200': (r) => r.status === 200 });
-
-  sleep(1);
+  check(res, { 'cart add 2xx or 409': (r) => r.status === 200 || r.status === 201 || r.status === 409 });
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -41,7 +42,7 @@ func Load() *Config {
 		KafkaBrokers:        getEnv("KAFKA_BROKERS", "localhost:9092"),
 		KafkaConsumerGroup:  getEnv("KAFKA_CONSUMER_GROUP", "payment-service"),
 		KafkaWorkerCount:    5, // 5 goroutines in worker pool
-		GatewaySuccessRate:  0.9,
+		GatewaySuccessRate:  getEnvFloat("GATEWAY_SUCCESS_RATE", 0.9),
 		GatewayMinLatencyMs: 50,
 		GatewayMaxLatencyMs: 200,
 		JWTPublicKeyPath:    getEnv("JWT_PUBLIC_KEY_PATH", "./keys/public.pem"),
@@ -59,6 +60,15 @@ func (c *Config) DSN() string {
 func getEnv(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok {
 		return v
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if v, ok := os.LookupEnv(key); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
 	}
 	return fallback
 }

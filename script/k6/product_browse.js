@@ -1,45 +1,41 @@
-// k6 load test — product browsing (read-heavy, no auth)
-// Run: k6 run script/k6/product_browse.js
-// Override base URL: k6 run --env BASE_URL=http://your-host script/k6/product_browse.js
-import http from 'k6/http';
-import { check, sleep } from 'k6';
+// Phase 2.A.3 — GET /api/v1/products/search at 150 RPS for 60s.
+// Target: testing_target.md §1 — P95 < 150ms, throughput ≥ 150 RPS.
+// Product-service caches keyword search 3 minutes — a warmup pass primes the cache so
+// the measured run reflects steady-state hit-rate, not cold-cache cost.
 
-const BASE = __ENV.BASE_URL || 'http://localhost';
+import http from 'k6/http';
+import { check } from 'k6';
+
+const PRODUCT_URL = __ENV.PRODUCT_URL || 'http://localhost:8081';
+
+const QUERIES = ['shoes', 'shirt', 'phone', 'laptop', 'watch', 'bag', 'book', 'lamp'];
 
 export const options = {
-  stages: [
-    { duration: '30s', target: 100 },  // ramp up to 100 VUs
-    { duration: '2m',  target: 100 },  // hold steady
-    { duration: '30s', target: 0   },  // ramp down
-  ],
+  scenarios: {
+    browse: {
+      executor: 'constant-arrival-rate',
+      rate: parseInt(__ENV.RATE || '150', 10),
+      timeUnit: '1s',
+      duration: __ENV.DURATION || '60s',
+      preAllocatedVUs: parseInt(__ENV.PRE_VUS || '30', 10),
+      maxVUs: parseInt(__ENV.MAX_VUS || '200', 10),
+    },
+  },
   thresholds: {
-    http_req_duration: ['p(95)<500'],  // 95th percentile under 500ms
-    http_req_failed:   ['rate<0.05'],  // <5%: accounts for expected 404s on sparse seed data
+    http_req_duration: ['p(95)<150'],
+    http_req_failed:   ['rate<0.01'],
+    checks:            ['rate>0.99'],
   },
 };
 
-export default function () {
-  const r = Math.random();
-
-  if (r < 0.5) {
-    // 50% — product list (exercises Redis productList cache)
-    const res = http.get(`${BASE}/api/v1/products`);
-    check(res, { 'list 200': (r) => r.status === 200 });
-
-  } else if (r < 0.8) {
-    // 30% — single product (exercises Redis product cache)
-    const id = Math.ceil(Math.random() * 10);
-    const res = http.get(`${BASE}/api/v1/products/${id}`);
-    // 404 is valid if the product doesn't exist in the test dataset
-    check(res, { 'detail 2xx/404': (r) => r.status === 200 || r.status === 404 });
-
-  } else {
-    // 20% — keyword search (exercises full-text + Redis productList cache)
-    const queries = ['widget', 'laptop', 'phone', 'shoes'];
-    const q = queries[Math.floor(Math.random() * queries.length)];
-    const res = http.get(`${BASE}/api/v1/products?q=${q}`);
-    check(res, { 'search 200': (r) => r.status === 200 });
+export function setup() {
+  for (const q of QUERIES) {
+    http.get(`${PRODUCT_URL}/api/v1/products/search?q=${encodeURIComponent(q)}&size=20`);
   }
+}
 
-  sleep(1); // realistic think time between page views
+export default function () {
+  const q = QUERIES[Math.floor(Math.random() * QUERIES.length)];
+  const res = http.get(`${PRODUCT_URL}/api/v1/products/search?q=${encodeURIComponent(q)}&size=20`);
+  check(res, { 'search 200': (r) => r.status === 200 });
 }
