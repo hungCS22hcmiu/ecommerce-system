@@ -1,67 +1,52 @@
-// k6 load test — order creation (20 VUs, Kafka saga entry point)
-// Run: k6 run script/k6/order_create.js
-// Requires: full stack including Kafka (docker compose up -d)
+// Phase 2.A.4 — POST /api/v1/orders at 50 RPS for 60s.
+// Target: testing_target.md §1 — P95 < 400ms, throughput ≥ 50 RPS, error rate < 0.1%.
 //
-// This test measures synchronous order-creation latency only.
-// It does NOT wait for the Kafka saga (payment processing) to complete.
-// Use script/loadtest-orders.sh to verify saga correctness at lower concurrency.
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
+// Each iteration creates one order against a fresh high-stock product seeded in setup().
+// Expected to FAIL the threshold given Phase 1 finding IMP-2 (optimistic-lock retry exhaustion).
 
-const BASE     = __ENV.BASE_URL  || 'http://localhost';
-const AUTH_URL = __ENV.AUTH_URL  || BASE;  // user-service; override when bypassing Nginx
+import http from 'k6/http';
+import { check } from 'k6';
+import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
+import { login, seedHighStockProduct } from './lib/auth.js';
+
+const AUTH_URL    = __ENV.AUTH_URL    || 'http://localhost:8001';
+const PRODUCT_URL = __ENV.PRODUCT_URL || 'http://localhost:8081';
+const ORDER_URL   = __ENV.ORDER_URL   || 'http://localhost:8082';
+const SEED_STOCK  = parseInt(__ENV.SEED_STOCK || '5000', 10);
 
 export const options = {
-  stages: [
-    { duration: '30s', target: 20 },   // ramp up
-    { duration: '2m',  target: 20 },   // hold
-    { duration: '30s', target: 0  },   // ramp down
-  ],
+  scenarios: {
+    orders: {
+      executor: 'constant-arrival-rate',
+      rate: parseInt(__ENV.RATE || '50', 10),
+      timeUnit: '1s',
+      duration: __ENV.DURATION || '60s',
+      preAllocatedVUs: parseInt(__ENV.PRE_VUS || '50', 10),
+      maxVUs: parseInt(__ENV.MAX_VUS || '300', 10),
+    },
+  },
   thresholds: {
-    http_req_duration: ['p(95)<2000'],  // order creation involves DB + Kafka publish
-    http_req_failed:   ['rate<0.05'],
+    'http_req_duration{expected_response:true}': ['p(95)<400'],
+    http_req_failed: ['rate<0.001'],
+    checks: ['rate>0.999'],
   },
 };
 
 export function setup() {
-  const res = http.post(
-    `${AUTH_URL}/api/v1/auth/login`,
-    JSON.stringify({ email: 'customer@example.com', password: 'Customer@123' }),
-    { headers: { 'Content-Type': 'application/json' } },
-  );
-  if (res.status !== 200) {
-    throw new Error(`Login failed: ${res.status} ${res.body}`);
-  }
-  const body = res.json();
-  const token = body.data.access_token;
-  const userId = body.data.user.id;
-  if (!token || !userId) throw new Error('Login response missing token or userId');
-  return { token, userId };
+  const seller   = login(AUTH_URL, 'seller@example.com',   'Seller@123');
+  const customer = login(AUTH_URL, 'customer@example.com', 'Customer@123');
+  const productId = seedHighStockProduct(PRODUCT_URL, seller.userId, SEED_STOCK, 'phase2-orders');
+  return { userId: customer.userId, productId };
 }
 
-export default function ({ token, userId }) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`,
-    'X-User-Id': userId,  // order-service reads userId from this header (set by gateway in prod)
-  };
-
-  // Each VU creates a fresh order with a unique cartId (no shared cart state)
+export default function ({ userId, productId }) {
   const payload = JSON.stringify({
     cartId: uuidv4(),
-    items: [{ productId: 1, quantity: 1 }],
-    shippingAddress: {
-      street: '123 Test Street',
-      city: 'Springfield',
-      state: 'IL',
-      country: 'US',
-      zipCode: '62701',
-    },
+    items: [{ productId, quantity: 1 }],
+    shippingAddress: { street: '1 Phase2 St', city: 'HCM', state: 'HCM', country: 'VN', zipCode: '70000' },
   });
-
-  const res = http.post(`${BASE}/api/v1/orders`, payload, { headers });
-  check(res, { 'order created 201': (r) => r.status === 201 });
-
-  sleep(2); // longer think time — order creation is heavier than reads
+  const res = http.post(`${ORDER_URL}/api/v1/orders`, payload, {
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+  });
+  check(res, { 'order 201': (r) => r.status === 201 });
 }

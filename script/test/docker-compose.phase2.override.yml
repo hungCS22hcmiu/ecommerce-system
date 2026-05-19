@@ -1,0 +1,12 @@
+services:
+  ai-service:
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health/ready').status==200 else 1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 30s

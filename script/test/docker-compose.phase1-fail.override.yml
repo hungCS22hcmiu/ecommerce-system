@@ -1,0 +1,4 @@
+services:
+  payment-service:
+    environment:
+      GATEWAY_SUCCESS_RATE: "0.0"

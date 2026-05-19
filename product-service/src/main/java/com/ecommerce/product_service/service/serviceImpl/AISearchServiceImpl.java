@@ -7,6 +7,7 @@ import com.ecommerce.product_service.model.Product;
 import com.ecommerce.product_service.repository.ProductRepository;
 import com.ecommerce.product_service.service.AISearchService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 @Service
+@Slf4j
 @Transactional(readOnly = true)
 @RequiredArgsConstructor
 public class AISearchServiceImpl implements AISearchService {
@@ -38,10 +40,14 @@ public class AISearchServiceImpl implements AISearchService {
             throw new IllegalArgumentException("Query must be at least 2 characters");
         }
 
+        // Phase 2 instrumentation — measure embed / vector / rerank in nanoseconds
+        long t0 = System.nanoTime();
+
         // Throws AIServiceException on failure — exception propagates before cache write,
         // so fallback results are never stored in "aiSearch" cache.
         float[] vector = embeddingClient.embed(query, query, limit);
         String vectorLiteral = toPgvectorLiteral(vector);
+        long tEmbed = System.nanoTime();
 
         // Set nprobe before the IVFFLAT scan; must be a separate statement — pgvector
         // reads the setting at access-method init, before any CTE or WHERE eval.
@@ -52,6 +58,7 @@ public class AISearchServiceImpl implements AISearchService {
                 : productRepository.findIdsBySemanticSimilarity(vectorLiteral, categoryId, limit);
         List<Long> ids = rows.stream().map(r -> ((Number) r[0]).longValue()).toList();
         List<Double> scores = rows.stream().map(r -> ((Number) r[1]).doubleValue()).toList();
+        long tVector = System.nanoTime();
 
         Map<Long, Product> byId = productRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(Product::getId, p -> p));
@@ -75,6 +82,14 @@ public class AISearchServiceImpl implements AISearchService {
                 }))
                 .map(this::toSummaryResponse)
                 .toList();
+        long tRerank = System.nanoTime();
+
+        log.info("ai.search.layer query='{}' embed_ms={} vector_ms={} rerank_ms={} results={}",
+                query,
+                (tEmbed - t0) / 1_000_000,
+                (tVector - tEmbed) / 1_000_000,
+                (tRerank - tVector) / 1_000_000,
+                results.size());
 
         return new AISearchResponse(query, results, scores, "ai");
     }

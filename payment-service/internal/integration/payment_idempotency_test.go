@@ -56,7 +56,7 @@ func TestConcurrentIdempotency(t *testing.T) {
 
 	repo := repository.NewPaymentRepository(db)
 
-	const N = 10
+	const N = 20 // Phase 4 — testing_plan.md §9 requires N=20 concurrent same-key inserts
 	idemKey := uuid.NewString()
 	orderID := uuid.New()
 	userID := uuid.New()
@@ -102,6 +102,7 @@ func TestConcurrentIdempotency(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, successCount, "exactly one goroutine must succeed")
+	assert.Equal(t, N-1, len(results)-successCount, "remaining N-1 must return ErrDuplicateIdempotencyKey")
 
 	// DB must have exactly one payment row for this idempotency key.
 	var paymentCount int64
