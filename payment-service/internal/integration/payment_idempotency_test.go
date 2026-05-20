@@ -5,8 +5,10 @@ package integration_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	pgmigrate "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -15,7 +17,9 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	gormpg "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -35,12 +39,16 @@ func TestConcurrentIdempotency(t *testing.T) {
 		tcpostgres.WithDatabase("ecommerce_payments"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForListeningPort("5432/tcp").WithStartupTimeout(30*time.Second),
+		),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pgCtr.Terminate(ctx) })
 
 	dsn, err := pgCtr.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
+	dsn = strings.Replace(dsn, "::1", "127.0.0.1", 1) // force IPv4 on macOS
 
 	db, err := gorm.Open(gormpg.Open(dsn), &gorm.Config{
 		Logger: gormlogger.Default.LogMode(gormlogger.Silent),

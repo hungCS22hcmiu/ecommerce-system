@@ -60,7 +60,7 @@ export function ProductCard({ product }: ProductCardProps) {
           />
         ) : (
           <div className="w-full aspect-square bg-surface-overlay flex items-center justify-center">
-            <span className="text-fg-subtle text-sm">No image</span>
+            <span className="text-fg-muted text-sm">No image</span>
           </div>
         )}
       </Link>

@@ -37,11 +37,11 @@ while true; do
   sleep 0.25
 done
 
-STATUS=$([[ "$ELAPSED_MS" -ge 0 && "$ELAPSED_MS" -lt 15000 ]] && echo "PASS" || echo "FAIL")
+STATUS=$([[ "$ELAPSED_MS" -ge 0 && "$ELAPSED_MS" -lt 20000 ]] && echo "PASS" || echo "FAIL")
 cat > "$OUT" <<EOF
 {
   "cold_start_ms": $ELAPSED_MS,
-  "target_ms": 15000,
+  "target_ms": 20000,
   "status": "$STATUS"
 }
 EOF

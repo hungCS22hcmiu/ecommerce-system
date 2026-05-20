@@ -27,30 +27,40 @@ if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
 fi
 echo -e "  ${YELLOW}→${RESET} login ok (user_id=$USER_ID)"
 
+# 1.5. Pick a product that has available stock (product 1 may be exhausted by load tests)
+PROD_PAGE=$(curl -sS "${BASE}/api/v1/products?page=0&size=50" \
+  -H "X-Correlation-ID: $CID" 2>/dev/null)
+PRODUCT_ID=$(echo "$PROD_PAGE" | jq -r '([.data[]? | select(.stockAvailable > 0)] | .[0].id) // "2"')
+echo -e "  ${YELLOW}→${RESET} productId=$PRODUCT_ID (stockAvailable>0)"
+
 # 2. Add to cart (touches cart-service + product-service via internal HTTP)
 curl -sS -X POST "$BASE/api/v1/cart/items" \
   -H "X-Correlation-ID: $CID" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"product_id":1,"quantity":1}' > /dev/null
+  -d "{\"product_id\":$PRODUCT_ID,\"quantity\":1}" > /dev/null
 echo -e "  ${YELLOW}→${RESET} cart/items ok"
 
 # 3. Create order (order-service → Kafka → payment-service)
 CART_UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
-ORDER_PAYLOAD=$(jq -n --arg c "$CART_UUID" '{
+ORDER_PAYLOAD=$(jq -n --arg c "$CART_UUID" --argjson pid "$PRODUCT_ID" '{
   cartId: $c,
-  items: [{productId: 1, quantity: 1}],
+  items: [{productId: $pid, quantity: 1}],
   shippingAddress: {street:"1 CID St", city:"HCM", state:"HCM", country:"VN", zipCode:"70000"}
 }')
-curl -sS -X POST "$BASE/api/v1/orders" \
+ORDER_RESP=$(curl -sS -X POST "$BASE/api/v1/orders" \
   -H "X-Correlation-ID: $CID" \
   -H "X-User-Id: $USER_ID" \
   -H 'Content-Type: application/json' \
-  -d "$ORDER_PAYLOAD" > /dev/null
-echo -e "  ${YELLOW}→${RESET} orders ok"
+  -d "$ORDER_PAYLOAD")
+if echo "$ORDER_RESP" | jq -e '.success == true' >/dev/null 2>&1; then
+  echo -e "  ${YELLOW}→${RESET} orders ok"
+else
+  echo -e "${RED}Order creation failed: $ORDER_RESP${RESET}"; exit 1
+fi
 
-# Let Kafka saga reach payment-service
-sleep 4
+# Let Kafka saga reach payment-service (outbox polls every 100ms; allow for consumer lag)
+sleep 6
 
 # 4. Grep logs for the uuid in each service
 echo ""

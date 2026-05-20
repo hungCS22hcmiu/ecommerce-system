@@ -1,5 +1,6 @@
 package com.ecommerce.product_service.service.serviceImpl;
 
+import com.ecommerce.product_service.dto.StockProjection;
 import com.ecommerce.product_service.dto.StockResponse;
 import com.ecommerce.product_service.exception.InsufficientStockException;
 import com.ecommerce.product_service.exception.ProductNotFoundException;
@@ -39,10 +40,6 @@ public class InventoryServiceImpl implements InventoryService {
             throw new StockContentionException(productId);
         }
 
-        // clearAutomatically = true on the query ensures this reads post-UPDATE state
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ProductNotFoundException(productId));
-
         stockMovementRepository.save(StockMovement.builder()
                 .productId(productId)
                 .type(MovementType.RESERVE)
@@ -50,7 +47,15 @@ public class InventoryServiceImpl implements InventoryService {
                 .referenceId(referenceId)
                 .build());
 
-        return toStockResponse(product);
+        // Use a projection instead of findById to avoid loading a managed Product entity
+        // into this writable transaction. Loading the full entity triggers a spurious
+        // Hibernate dirty-check UPDATE (incrementing @Version) even though no application
+        // code modifies the entity, causing ObjectOptimisticLockingFailureException under
+        // concurrent load and false INSUFFICIENT_STOCK errors.
+        StockProjection sp = productRepository.findStockById(productId)
+                .orElseThrow(() -> new ProductNotFoundException(productId));
+        return new StockResponse(productId, sp.getStockQuantity(), sp.getStockReserved(),
+                sp.getStockQuantity() - sp.getStockReserved());
     }
 
     @Override
@@ -66,9 +71,6 @@ public class InventoryServiceImpl implements InventoryService {
                     "Cannot release " + quantity + " units: only " + product.getStockReserved() + " reserved");
         }
 
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ProductNotFoundException(productId));
-
         stockMovementRepository.save(StockMovement.builder()
                 .productId(productId)
                 .type(MovementType.RELEASE)
@@ -76,7 +78,10 @@ public class InventoryServiceImpl implements InventoryService {
                 .referenceId(referenceId)
                 .build());
 
-        return toStockResponse(product);
+        StockProjection sp = productRepository.findStockById(productId)
+                .orElseThrow(() -> new ProductNotFoundException(productId));
+        return new StockResponse(productId, sp.getStockQuantity(), sp.getStockReserved(),
+                sp.getStockQuantity() - sp.getStockReserved());
     }
 
     @Override

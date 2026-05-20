@@ -16,6 +16,7 @@ public class CacheWarmupService {
 
     private final ProductRepository productRepository;
     private final ProductService productService;
+    private final AISearchService aiSearchService;
 
     /**
      * Warms the "product" cache on startup by pre-loading the 100 most recently
@@ -45,5 +46,24 @@ public class CacheWarmupService {
 
         long elapsed = System.currentTimeMillis() - start;
         log.info("[CacheWarmup] Completed: {} products cached in {}ms", warmed, elapsed);
+    }
+
+    @Async("taskExecutor")
+    @EventListener(ApplicationReadyEvent.class)
+    public void warmAI() {
+        log.info("[CacheWarmup] Starting AI search warm-up...");
+        long start = System.currentTimeMillis();
+        String[] warmupQueries = {"laptop", "shoes", "coffee maker"};
+        int warmed = 0;
+        for (String q : warmupQueries) {
+            try {
+                aiSearchService.search(q, 5, null, null);
+                warmed++;
+            } catch (Exception e) {
+                log.warn("[CacheWarmup] AI warmup skipped for query='{}': {}", q, e.getMessage());
+            }
+        }
+        log.info("[CacheWarmup] AI warm-up done: {}/{} queries in {}ms",
+                warmed, warmupQueries.length, System.currentTimeMillis() - start);
     }
 }

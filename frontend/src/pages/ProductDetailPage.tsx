@@ -73,7 +73,7 @@ export function ProductDetailPage() {
                 className="w-full h-full object-cover"
               />
             ) : (
-              <span className="text-fg-subtle text-sm">No image</span>
+              <span className="text-fg-muted text-sm">No image</span>
             )}
           </div>
           {product && product.images.length > 1 && (
@@ -160,6 +160,7 @@ export function ProductDetailPage() {
                   <div className="flex items-center border border-surface-border rounded-md overflow-hidden">
                     <button
                       type="button"
+                      aria-label="Decrease quantity"
                       onClick={() => {
                         const next = Math.max(1, qty - 1)
                         setQty(next)
@@ -184,6 +185,7 @@ export function ProductDetailPage() {
                     />
                     <button
                       type="button"
+                      aria-label="Increase quantity"
                       onClick={() => {
                         const next = Math.min(product.stockAvailable, qty + 1)
                         setQty(next)

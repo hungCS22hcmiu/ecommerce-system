@@ -30,7 +30,7 @@ export function Navbar() {
               >
                 SHOP
               </Link>
-              <div className="flex items-center gap-6">
+              <div className="hidden sm:flex items-center gap-6">
                 <NavLink
                   to="/products"
                   className={({ isActive }) =>
@@ -105,6 +105,7 @@ export function Navbar() {
                   {/* Cart button */}
                   <button
                     type="button"
+                    aria-label="Open cart"
                     onClick={() => setCartOpen(true)}
                     className="relative flex items-center gap-1.5 text-fg-muted hover:text-fg-base transition-colors px-2 py-1"
                   >

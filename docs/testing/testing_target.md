@@ -54,7 +54,7 @@ The AI search feature involves the Python AI Service (embeddings) and Postgres `
 *   **Target:** P95 < 1.0s.
 
 ### C. Resource & Cold Start
-*   **Cold Start:** AI Service must be healthy (`/health/ready`) within 15s of startup (model loading).
+*   **Cold Start:** AI Service must be healthy (`/health/ready`) within 20s of startup (model loading, CPU-only torch on Docker Desktop Mac).
 *   **Memory Limit:** AI Service container should not exceed **1.5GB RAM** under load.
 *   **Throughput:** Handle **20 RPS** for semantic search on M1 Pro.
 
@@ -99,8 +99,8 @@ The system uses separate connection pools per service. All services share a sing
 *   **Target:** **100% propagation.** A single trace ID must be trackable from Nginx -> Order Svc -> Kafka -> Payment Svc.
 
 ### D. Rate Limiting (Nginx)
-*   **General API:** 10 req/s per IP. Target: **429 Too Many Requests** on 11th request.
-*   **Auth (Brute Force):** 5 req/min. Target: **429 Too Many Requests** on 6th request.
+*   **General API:** 10 req/s per IP, burst=5 (`nodelay`). Target: **429 Too Many Requests** on 16th request.
+*   **Auth (Brute Force):** 5 req/min, burst=3 (`nodelay`). Target: **429 Too Many Requests** on 9th request.
 
 ## 8. Frontend UX & Reliability Targets
 

@@ -1,5 +1,6 @@
 package com.ecommerce.product_service.repository;
 
+import com.ecommerce.product_service.dto.StockProjection;
 import com.ecommerce.product_service.model.Product;
 import com.ecommerce.product_service.model.ProductStatus;
 import org.springframework.data.domain.Page;
@@ -107,6 +108,13 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     List<Object[]> findIdsBySemanticSimilarity(@Param("queryVec") String queryVec,
                                                @Param("categoryId") Long categoryId,
                                                @Param("limit") int limit);
+
+    // Stock-only projection: fetches stockQuantity and stockReserved without loading a
+    // managed entity. Used in InventoryServiceImpl success paths to avoid triggering
+    // Hibernate dirty-check on the Product entity (which would increment @Version
+    // under the writable @Transactional context and cause concurrent OptimisticLockException).
+    @Query("SELECT p.stockQuantity as stockQuantity, p.stockReserved as stockReserved FROM Product p WHERE p.id = :id")
+    Optional<StockProjection> findStockById(@Param("id") Long id);
 
     // Atomic conditional reserve: increments stock_reserved only when available >= qty.
     // Returns 1 on success, 0 on insufficient stock or missing product.

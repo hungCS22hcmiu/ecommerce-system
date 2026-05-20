@@ -43,6 +43,7 @@ export function CartItem({ item, stockAvailable, thumbnailUrl }: CartItemProps) 
           <div className="flex items-center border border-surface-border rounded overflow-hidden">
             <button
               type="button"
+              aria-label="Decrease quantity"
               onClick={() => {
                 if (item.quantity <= 1) {
                   removeItem.mutate(item.product_id)
@@ -58,6 +59,7 @@ export function CartItem({ item, stockAvailable, thumbnailUrl }: CartItemProps) 
             <span className="w-8 text-center text-xs font-mono text-fg-base">{item.quantity}</span>
             <button
               type="button"
+              aria-label="Increase quantity"
               onClick={() =>
                 updateItem.mutate({ productId: item.product_id, quantity: item.quantity + 1 })
               }
@@ -78,6 +80,7 @@ export function CartItem({ item, stockAvailable, thumbnailUrl }: CartItemProps) 
 
           <button
             type="button"
+            aria-label="Remove item"
             onClick={() => removeItem.mutate(item.product_id)}
             disabled={removeItem.isPending}
             className="text-fg-subtle hover:text-status-failed transition-colors text-xs disabled:opacity-40"
