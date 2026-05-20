@@ -21,6 +21,8 @@ type UserRepository interface {
 	// FindByEmailForUpdate acquires a row-level lock (SELECT ... FOR UPDATE).
 	// Must be called inside a GORM transaction.
 	FindByEmailForUpdate(ctx context.Context, tx *gorm.DB, email string) (*model.User, error)
+	// FindByEmailWithProfile loads the user with Profile preloaded for the login path (no row lock).
+	FindByEmailWithProfile(ctx context.Context, email string) (*model.User, error)
 	// UpdateLoginAttempts updates the failed_login_attempts counter and is_locked flag.
 	// Must be called inside a GORM transaction.
 	UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, userID uuid.UUID, attempts int, isLocked bool) error
@@ -58,6 +60,18 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*model.
 func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var user model.User
 	err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &user, err
+}
+
+func (r *userRepository) FindByEmailWithProfile(ctx context.Context, email string) (*model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).
+		Preload("Profile").
+		Where("email = ?", email).
+		First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}

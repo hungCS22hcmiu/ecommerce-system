@@ -70,8 +70,10 @@ class InventoryServiceImplTest {
 
         @Test
         void happyPath_reservesStockAndRecordsMovement() {
-            givenProductExists();
-            when(productRepository.save(any())).thenReturn(product);
+            // Simulate the post-update state that findById returns after the conditional UPDATE
+            product.setStockReserved(5);
+            when(productRepository.reserveStockConditional(1L, 5)).thenReturn(1);
+            when(productRepository.findById(1L)).thenReturn(Optional.of(product));
 
             StockResponse response = inventoryService.reserveStock(1L, 5, "order-123");
 
@@ -80,9 +82,8 @@ class InventoryServiceImplTest {
             assertThat(response.stockReserved()).isEqualTo(5);
             assertThat(response.availableStock()).isEqualTo(5);
 
-            ArgumentCaptor<Product> productCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(productRepository).save(productCaptor.capture());
-            assertThat(productCaptor.getValue().getStockReserved()).isEqualTo(5);
+            // Conditional UPDATE replaces save() — verify save is never called
+            verify(productRepository, never()).save(any());
 
             ArgumentCaptor<StockMovement> movementCaptor = ArgumentCaptor.forClass(StockMovement.class);
             verify(stockMovementRepository).save(movementCaptor.capture());
@@ -94,20 +95,23 @@ class InventoryServiceImplTest {
 
         @Test
         void insufficientStock_throwsException() {
-            product.setStockReserved(8); // available = 10 - 8 = 2
-            givenProductExists();
+            // Conditional UPDATE returns 0: guard clause (stock_quantity - stock_reserved) >= qty was false
+            product.setStockReserved(8); // available = 10 - 8 = 2, requesting 5
+            when(productRepository.reserveStockConditional(1L, 5)).thenReturn(0);
+            when(productRepository.findById(1L)).thenReturn(Optional.of(product));
 
             assertThatThrownBy(() -> inventoryService.reserveStock(1L, 5, "order-456"))
                     .isInstanceOf(InsufficientStockException.class)
                     .hasMessageContaining("requested=5")
                     .hasMessageContaining("available=2");
 
-            verify(productRepository, never()).save(any());
             verify(stockMovementRepository, never()).save(any());
         }
 
         @Test
         void productNotFound_throwsException() {
+            // Conditional UPDATE returns 0 (no row matched) and findById confirms product is missing
+            when(productRepository.reserveStockConditional(1L, 3)).thenReturn(0);
             givenProductNotFound();
 
             assertThatThrownBy(() -> inventoryService.reserveStock(1L, 3, "order-789"))
@@ -116,8 +120,10 @@ class InventoryServiceImplTest {
 
         @Test
         void exactAvailableStock_succeeds() {
-            givenProductExists();
-            when(productRepository.save(any())).thenReturn(product);
+            // Reserve exactly all available stock
+            product.setStockReserved(10); // post-update: all 10 units reserved
+            when(productRepository.reserveStockConditional(1L, 10)).thenReturn(1);
+            when(productRepository.findById(1L)).thenReturn(Optional.of(product));
 
             StockResponse response = inventoryService.reserveStock(1L, 10, "order-exact");
 
@@ -138,17 +144,24 @@ class InventoryServiceImplTest {
 
         @Test
         void happyPath_releasesStockAndRecordsMovement() {
-            givenProductExists();
-            when(productRepository.save(any())).thenReturn(product);
+            // Simulate post-update state: 5 reserved - 3 released = 2 remaining
+            Product updatedProduct = Product.builder()
+                    .id(1L)
+                    .name("Test Product")
+                    .price(new BigDecimal("99.99"))
+                    .sellerId(product.getSellerId())
+                    .stockQuantity(10)
+                    .stockReserved(2)
+                    .build();
+            when(productRepository.releaseStockConditional(1L, 3)).thenReturn(1);
+            when(productRepository.findById(1L)).thenReturn(Optional.of(updatedProduct));
 
             StockResponse response = inventoryService.releaseStock(1L, 3, "order-123");
 
             assertThat(response.stockReserved()).isEqualTo(2);
             assertThat(response.availableStock()).isEqualTo(8);
 
-            ArgumentCaptor<Product> productCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(productRepository).save(productCaptor.capture());
-            assertThat(productCaptor.getValue().getStockReserved()).isEqualTo(2);
+            verify(productRepository, never()).save(any());
 
             ArgumentCaptor<StockMovement> movementCaptor = ArgumentCaptor.forClass(StockMovement.class);
             verify(stockMovementRepository).save(movementCaptor.capture());
@@ -157,17 +170,20 @@ class InventoryServiceImplTest {
 
         @Test
         void releaseMoreThanReserved_throwsException() {
+            // Conditional UPDATE returns 0: guard clause stock_reserved >= qty was false (10 > 5)
+            when(productRepository.releaseStockConditional(1L, 10)).thenReturn(0);
             givenProductExists();
 
             assertThatThrownBy(() -> inventoryService.releaseStock(1L, 10, "order-over"))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Cannot release 10");
 
-            verify(productRepository, never()).save(any());
+            verify(stockMovementRepository, never()).save(any());
         }
 
         @Test
         void productNotFound_throwsException() {
+            when(productRepository.releaseStockConditional(1L, 3)).thenReturn(0);
             givenProductNotFound();
 
             assertThatThrownBy(() -> inventoryService.releaseStock(1L, 3, "order-789"))

@@ -90,6 +90,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			response.Error(c, http.StatusForbidden, "ACCOUNT_LOCKED", "account is locked due to too many failed login attempts", nil)
 		case errors.Is(err, service.ErrEmailNotVerified):
 			response.Error(c, http.StatusForbidden, "EMAIL_NOT_VERIFIED", "please verify your email before logging in", nil)
+		case errors.Is(err, service.ErrBcryptOverload):
+			c.Header("Retry-After", "1")
+			response.Error(c, http.StatusServiceUnavailable, "SERVICE_OVERLOADED", "Server is under heavy load. Please retry shortly.", nil)
 		default:
 			response.InternalError(c)
 		}

@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -31,6 +32,9 @@ public class ProductServiceClient {
                 throw new InsufficientStockException(productId);
             }
             log.error("Failed to reserve stock for productId={}, status={}", productId, e.getStatusCode());
+            throw new IllegalStateException("Failed to reserve stock for product " + productId + ": " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            log.warn("Product service returned {} for productId={}", e.getStatusCode(), productId);
             throw new IllegalStateException("Failed to reserve stock for product " + productId + ": " + e.getMessage());
         }
     }

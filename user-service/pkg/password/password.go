@@ -1,8 +1,21 @@
 package password
 
-import "golang.org/x/crypto/bcrypt"
+import (
+	"os"
+	"strconv"
 
-const cost = 12
+	"golang.org/x/crypto/bcrypt"
+)
+
+var cost = 12
+
+func init() {
+	if v := os.Getenv("BCRYPT_COST"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= bcrypt.MinCost && n <= bcrypt.MaxCost {
+			cost = n
+		}
+	}
+}
 
 // Hash returns a bcrypt hash of the plaintext password.
 func Hash(plaintext string) (string, error) {

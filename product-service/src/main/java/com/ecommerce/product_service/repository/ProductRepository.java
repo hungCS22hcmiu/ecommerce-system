@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -106,6 +107,23 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
     List<Object[]> findIdsBySemanticSimilarity(@Param("queryVec") String queryVec,
                                                @Param("categoryId") Long categoryId,
                                                @Param("limit") int limit);
+
+    // Atomic conditional reserve: increments stock_reserved only when available >= qty.
+    // Returns 1 on success, 0 on insufficient stock or missing product.
+    // clearAutomatically = true ensures subsequent findById() reads fresh DB state in the same TX.
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE products SET stock_reserved = stock_reserved + :qty " +
+                   "WHERE id = :id AND (stock_quantity - stock_reserved) >= :qty",
+           nativeQuery = true)
+    int reserveStockConditional(@Param("id") Long id, @Param("qty") int qty);
+
+    // Atomic conditional release: decrements stock_reserved only when reserved >= qty.
+    // Returns 1 on success, 0 when trying to release more than reserved.
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE products SET stock_reserved = stock_reserved - :qty " +
+                   "WHERE id = :id AND stock_reserved >= :qty",
+           nativeQuery = true)
+    int releaseStockConditional(@Param("id") Long id, @Param("qty") int qty);
 
     // AI/vector search scoped to a single seller
     @Query(value = """

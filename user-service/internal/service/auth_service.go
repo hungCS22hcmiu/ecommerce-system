@@ -52,6 +52,7 @@ var (
 	ErrTooManyVerifyAttempts = errors.New("too many verification attempts")
 	ErrResetCooldown         = errors.New("reset request on cooldown")
 	ErrTooManyResetAttempts  = errors.New("too many reset attempts")
+	ErrBcryptOverload        = errors.New("bcrypt worker pool overloaded")
 )
 
 type AuthService interface {
@@ -78,6 +79,7 @@ type authService struct {
 	publicKey         *rsa.PublicKey
 	resetStore        reset.Store
 	appURL            string
+	bcryptPool        *password.Pool // nil → fallback to password.Compare (tests)
 }
 
 // NewAuthService wires all production dependencies.
@@ -94,6 +96,7 @@ func NewAuthService(
 	publicKey *rsa.PublicKey,
 	resetStore reset.Store,
 	appURL string,
+	bcryptPool *password.Pool,
 ) AuthService {
 	return &authService{
 		userRepo:          userRepo,
@@ -108,6 +111,7 @@ func NewAuthService(
 		publicKey:         publicKey,
 		resetStore:        resetStore,
 		appURL:            appURL,
+		bcryptPool:        bcryptPool,
 	}
 }
 
@@ -162,10 +166,10 @@ func (s *authService) Register(ctx context.Context, req dto.RegisterRequest) (*m
 // Login authenticates a user and returns access + refresh tokens.
 // Flow:
 //  1. Redis pre-check: if attempt counter >= max → ErrAccountLocked (no DB hit)
-//  2. DB transaction: SELECT FOR UPDATE → verify password → update counters → generate tokens
-//     Auth-layer errors (wrong password, locked) are stored in loginErr; the TX
-//     always commits so that UpdateLoginAttempts writes are not rolled back.
-//  3. Post-TX: update Redis counter; on success cache session profile
+//  2. Plain DB read (no transaction, no FOR UPDATE): fetch user + profile
+//  3. Bcrypt verify via worker pool (outside any DB lock)
+//  4. On success: small TX to persist the refresh token
+//  5. Post-verify: Redis INCR on bad password; Redis DEL + session cache on success
 func (s *authService) Login(ctx context.Context, req dto.LoginRequest) (*dto.LoginResponse, error) {
 	// 1. Redis pre-check (fast path before touching the DB)
 	if s.attemptCounter != nil {
@@ -175,53 +179,43 @@ func (s *authService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 		}
 	}
 
-	var (
-		resp        *dto.LoginResponse
-		loginErr    error // auth error; TX commits even when set
-		badPassword bool  // signals post-TX Redis INCR
-	)
+	// 2. Plain read — no transaction, no FOR UPDATE (lockout is Redis-authoritative)
+	user, err := s.userRepo.FindByEmailWithProfile(ctx, req.Email)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, err
+	}
 
-	txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		user, err := s.userRepo.FindByEmailForUpdate(ctx, tx, req.Email)
-		if errors.Is(err, repository.ErrNotFound) {
-			loginErr = ErrInvalidCredentials
-			return nil // no row to update — commit the no-op TX
+	// 3. Bcrypt verify outside any DB lock — use pool when available
+	var verifyErr error
+	if s.bcryptPool != nil {
+		verifyErr = s.bcryptPool.Verify(ctx, user.PasswordHash, req.Password)
+		if errors.Is(verifyErr, password.ErrBcryptOverload) {
+			return nil, ErrBcryptOverload
 		}
-		if err != nil {
-			return err // real DB error → rollback
-		}
-
-		if user.IsLocked {
-			loginErr = ErrAccountLocked
-			return nil
-		}
-
+	} else {
 		if !password.Compare(user.PasswordHash, req.Password) {
-			newAttempts := user.FailedLoginAttempts + 1
-			locked := newAttempts >= maxLoginAttempts
-			if updateErr := s.userRepo.UpdateLoginAttempts(ctx, tx, user.ID, newAttempts, locked); updateErr != nil {
-				return updateErr // real DB error → rollback
-			}
-			badPassword = true
-			if locked {
-				loginErr = ErrAccountLocked
-			} else {
-				loginErr = ErrInvalidCredentials
-			}
-			return nil // ← commit so the counter update persists
+			verifyErr = errors.New("mismatch")
 		}
+	}
 
-		// Successful password — reset DB counter
-		if err := s.userRepo.UpdateLoginAttempts(ctx, tx, user.ID, 0, false); err != nil {
-			return err
+	if verifyErr != nil {
+		if s.attemptCounter != nil {
+			s.attemptCounter.Increment(ctx, req.Email) //nolint:errcheck — best-effort
 		}
+		return nil, ErrInvalidCredentials
+	}
 
-		// Check email verification before issuing tokens
-		if !user.IsVerified {
-			loginErr = ErrEmailNotVerified
-			return nil // commit TX — counter reset persists
-		}
+	// Check email verification before issuing tokens
+	if !user.IsVerified {
+		return nil, ErrEmailNotVerified
+	}
 
+	// 4. Small TX: persist refresh token only
+	var resp *dto.LoginResponse
+	txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		accessToken, err := jwtpkg.GenerateAccessToken(user.ID.String(), user.Email, user.Role, s.privateKey)
 		if err != nil {
 			return fmt.Errorf("generate access token: %w", err)
@@ -260,20 +254,11 @@ func (s *authService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Log
 		}
 		return nil
 	})
-
-	// 3. Post-TX Redis updates (outside transaction)
-	if badPassword && s.attemptCounter != nil {
-		s.attemptCounter.Increment(ctx, req.Email) //nolint:errcheck — best-effort
-	}
-
 	if txErr != nil {
 		return nil, txErr
 	}
-	if loginErr != nil {
-		return nil, loginErr
-	}
 
-	// Success: clear Redis counter and cache session profile
+	// 5. Post-success: clear Redis counter and cache session profile
 	if s.attemptCounter != nil {
 		s.attemptCounter.Delete(ctx, req.Email) //nolint:errcheck — best-effort
 	}
