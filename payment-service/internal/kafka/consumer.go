@@ -205,10 +205,16 @@ func (c *Consumer) processMessage(ctx context.Context, msg kafka.Message, worker
 
 	// 3. Publish the outcome event so order-service can transition order status.
 	if publishErr := c.publishOutcome(msgCtx, payment, correlationID); publishErr != nil {
-		slog.Error("kafka.worker: publish outcome failed",
+		if payment.Status == model.PaymentStatusPending {
+			// PENDING: gateway call was not completed — skip commit to force redelivery.
+			slog.Warn("kafka.worker: payment still PENDING, not committing offset",
+				append(logBase, "error", publishErr)...)
+			return
+		}
+		// Terminal payment with a Kafka publish failure: commit anyway because
+		// re-delivery would hit the idempotency key and return the same terminal outcome.
+		slog.Error("kafka.worker: publish outcome failed (committing — terminal state)",
 			append(logBase, "paymentStatus", payment.Status, "error", publishErr)...)
-		// Still commit — the payment row is persisted; a duplicate Kafka delivery
-		// would hit the idempotency key and return the same outcome.
 	}
 
 	if commitErr := c.reader.CommitMessages(msgCtx, msg); commitErr != nil {
@@ -263,8 +269,10 @@ func (c *Consumer) publishOutcome(ctx context.Context, payment *model.Payment, c
 			Reason:  fmt.Sprintf("gateway declined (paymentId=%s)", payment.ID),
 		}, correlationID)
 	default:
-		// PENDING means ProcessPayment left it in a transient state — not a publish error.
-		return nil
+		// PENDING: ProcessPayment left the payment in an incomplete state (e.g. killed
+		// mid-UpdateStatus). Return a non-nil error so the caller skips CommitMessages,
+		// forcing Kafka redelivery and another ProcessPayment attempt.
+		return fmt.Errorf("payment %s still PENDING after ProcessPayment", payment.ID)
 	}
 }
 

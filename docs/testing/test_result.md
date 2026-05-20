@@ -1,15 +1,15 @@
 # System Test Results
 
-## Executive Summary  (all 5 phases complete, last update 2026-05-21 02:48)
+## Executive Summary  (all 5 phases complete, last update 2026-05-21 03:14)
 
 | Phase | Targets evaluated | PASS | FAIL | AT_RISK | INFRA_FLAKE / MISSING | Headline finding |
 |---|---|---|---|---|---|---|
 | 1 — Functional & Saga | 6 | 6 | 0 | 0 | 0 / 0 | All 6 targets PASS incl. saga replay (TestDuplicateDeliveryIdempotency) + correlation-ID |
 | 2 — Load & Throughput | 15 | 6 | 7 | 2 | 0 / 0 | `/auth/login` collapses at 100 RPS (bcrypt+lock); AI cold start now PASS (9.2s); AISearchabilityLag PASS (p95=31ms) |
-| 3 — Resilience & Chaos | 6 | 5 | 1 | 0 | 0 / 0 | 1 PENDING order leaks per ~900 across payment-service kill (IMP-13) |
+| 3 — Resilience & Chaos | 6 | 6 | 0 | 0 | 0 / 0 | **IMP-13 closed**: 0 PENDING leaks across payment-service kill; PENDING-resume fix in ProcessPayment |
 | 4 — Testing Debt | 5 | 5 | 0 | 0 | 0 / 0 | All 5 PASS; payment idempotency no longer flaky (wait-strategy fix) |
 | 5 — Frontend UX | 3 | 3 | 0 | 0 | 0 / 0 | Responsive + a11y both fixed (navbar hidden on mobile; "No image" contrast ratio) |
-| **Total** | **35** | **25** | **8** | **2** | **0** | Remaining FAILs are architectural (bcrypt latency, Kafka throughput, CPU-only AI latency) |
+| **Total** | **35** | **26** | **7** | **2** | **0** | Remaining FAILs are architectural (bcrypt latency, Kafka throughput, CPU-only AI latency) |
 
 **Re-run commands** (each runs ~5–15 min):
 ```bash
@@ -62,16 +62,16 @@ Each orchestrator writes its phase section back to this file (idempotent — re-
 | §6-PG-Conns | Postgres conns: per-DB ≤25 (Go)/20 (Java), global ≤ 150 | global peak=72; per-DB peaks=ecommerce_carts:7, ecommerce_orders:14, ecommerce_payments:8, ecommerce_products:22, ecommerce_users:19, postgres:2 | **PASS** | `script/k6/results/monitors/pg.csv` |
 | §6-HikariLeak | Zero HikariCP leak warnings | leak_count=0 | **PASS** | `script/k6/results/monitors/hikari.log` |
 
-## Phase 3 — Resilience & Chaos  (run 2026-05-18 23:33)
+## Phase 3 — Resilience & Chaos  (run 2026-05-21 03:14)
 
 | Target ID | Target | Observed | Status | Evidence |
 |---|---|---|---|---|
 | §7.A-CB | Cart CB OPEN after 5 failures (last 5 of 10 POST = 503) | 503=5, other=5, statuses=`000 000 000 000 000 503 503 503 503 503` | **PASS** | `script/k6/results/chaos_cb_cart.json` |
-| §7.A-Deg | GET /cart P95 < 20ms while product-service down | P95=5ms; thresholds breached=none | **PASS** | `script/k6/results/cart_get_degraded.json` |
+| §7.A-Deg | GET /cart P95 < 20ms while product-service down | P95=4ms; thresholds breached=none | **PASS** | `script/k6/results/cart_get_degraded.json` |
 | §3.C | Concurrent Kafka + HTTP transition — 0 deadlocks, 0 500s | rounds=20 ship 200/409/500/other=0/20/0/0; deadlocks=0, 5xx_in_logs=0 | **PASS** | `script/k6/results/chaos_order_race.json` |
 | §7.D-API | Nginx api_limit — ≥35 of 50 burst are 429 (matches burst=5 cfg) | 200=6, 429=44, other=0 | **PASS** | `script/k6/results/rate_limit_api.json` |
 | §7.D-Auth | Nginx auth_limit — ≥1 of 9 sequential logins is 429 | 200=4, 401=0, 429=5, other=0 | **PASS** | `script/k6/results/rate_limit_auth.json` |
-| Mid-Saga | Payment-service kill recovery — 0 PENDING, 0 DLQ delta, 0 dup payments | pending=1, dlq_delta=0, duplicates=0, payments_in_window=898 | **FAIL** | `script/k6/results/chaos_saga_kill.json` |
+| Mid-Saga | Payment-service kill recovery — 0 PENDING, 0 DLQ delta, 0 dup payments | pending=0, dlq_delta=0, duplicates=0, payments_in_window=900 | **PASS** | `script/k6/results/chaos_saga_kill.json` |
 
 ## Phase 4 — Testing Debt  (run 2026-05-21 02:07)
 
