@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -286,6 +287,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @Async("taskExecutor")
     @Transactional
     public void releaseStockForOrder(UUID orderId) {
         Order order = orderRepository.findById(orderId)
