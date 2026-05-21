@@ -60,7 +60,7 @@ payment-service ──kafka──▶  payments.completed/failed  ──▶  orde
 
 **Databases:** Single PostgreSQL instance, 5 logical databases (`ecommerce_users/products/carts/orders/payments`). Schemas auto-applied from `script/init-databases.sql` at container start.
 
-**Redis:** sessions + JWT blacklist (user-service) · primary cart store (cart-service) · cache-aside (product-service).
+**Redis:** sessions + JWT blacklist (user-service) · primary cart store (cart-service) · cache-aside (product-service). **AOF (dev):** `appendfsync everysec` + `no-appendfsync-on-rewrite yes` (eliminates fsync stalls during AOF rewrite). In production tune `appendfsync` to `always` for max durability or `no` for max throughput.
 
 **AI Search:** `ai-service` runs `all-MiniLM-L6-v2` (384 dims) locally. Products are embedded on create/update (write-through) and searchable via cosine similarity with pgvector.
 

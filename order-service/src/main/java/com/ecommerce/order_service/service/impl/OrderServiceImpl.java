@@ -10,19 +10,27 @@ import com.ecommerce.order_service.model.*;
 import com.ecommerce.order_service.repository.OrderItemRepository;
 import com.ecommerce.order_service.repository.OrderRepository;
 import com.ecommerce.order_service.repository.OrderStatusHistoryRepository;
+import com.ecommerce.order_service.repository.OutboxEventRepository;
 import com.ecommerce.order_service.service.NotificationService;
 import com.ecommerce.order_service.service.OrderService;
 import com.ecommerce.order_service.service.OrderStateMachine;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -40,6 +48,8 @@ public class OrderServiceImpl implements OrderService {
     private final ProductServiceClient productServiceClient;
     private final OrderEventProducer eventProducer;
     private final NotificationService notificationService;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional
@@ -148,7 +158,7 @@ public class OrderServiceImpl implements OrderService {
                 .changedBy(userId.toString())
                 .build());
 
-        // 6. Publish Kafka event
+        // 6. Write Kafka event to outbox (same TX — atomic with the order insert)
         OrderCreatedEvent event = OrderCreatedEvent.builder()
                 .orderId(saved.getId())
                 .userId(saved.getUserId())
@@ -161,7 +171,18 @@ public class OrderServiceImpl implements OrderService {
                                 .build())
                         .collect(Collectors.toList()))
                 .build();
-        eventProducer.publishOrderCreated(event);
+        String correlationId = Optional.ofNullable(MDC.get("correlationId"))
+                .orElse(UUID.randomUUID().toString());
+        try {
+            outboxEventRepository.save(OutboxEvent.builder()
+                    .orderId(saved.getId())
+                    .payload(objectMapper.writeValueAsString(event))
+                    .headers(objectMapper.writeValueAsString(Map.of("X-Correlation-ID", correlationId)))
+                    .createdAt(OffsetDateTime.now())
+                    .build());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize outbox event for orderId=" + saved.getId(), e);
+        }
 
         try {
             notificationService.notifySeller(orderSellerId, saved.getId(),
@@ -266,6 +287,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @Async("taskExecutor")
     @Transactional
     public void releaseStockForOrder(UUID orderId) {
         Order order = orderRepository.findById(orderId)

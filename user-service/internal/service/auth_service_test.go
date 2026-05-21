@@ -62,6 +62,14 @@ func (m *mockUserRepo) FindByEmailForUpdate(ctx context.Context, tx *gorm.DB, em
 	return args.Get(0).(*model.User), args.Error(1)
 }
 
+func (m *mockUserRepo) FindByEmailWithProfile(ctx context.Context, email string) (*model.User, error) {
+	args := m.Called(ctx, email)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.User), args.Error(1)
+}
+
 func (m *mockUserRepo) UpdateLoginAttempts(ctx context.Context, tx *gorm.DB, userID uuid.UUID, attempts int, isLocked bool) error {
 	args := m.Called(ctx, tx, userID, attempts, isLocked)
 	return args.Error(0)
@@ -232,30 +240,27 @@ func TestLogin_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	user := &model.User{
 		Email:      "john@example.com",
 		Role:       "customer",
-		IsLocked:   false,
 		IsVerified: true,
 		Profile:    &model.UserProfile{FirstName: "John", LastName: "Doe"},
 	}
 	user.ID = userID
 
-	// bcrypt hash of "secret123"
 	hash, err := bcryptHash("secret123")
 	require.NoError(t, err)
 	user.PasswordHash = hash
 
+	// Only the token-insert TX; bcrypt runs outside any transaction now
 	dbMock.ExpectBegin()
 	dbMock.ExpectCommit()
 
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(user, nil)
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
-		Return(nil)
 	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(nil)
 
@@ -275,143 +280,47 @@ func TestLogin_Success(t *testing.T) {
 }
 
 func TestLogin_UserNotFound_ReturnsErrInvalidCredentials(t *testing.T) {
-	db, dbMock := newMockDB(t)
+	db, _ := newMockDB(t)
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
-	dbMock.ExpectBegin()
-	dbMock.ExpectCommit() // TX commits (no-op) — loginErr carries the auth error
-
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	// No DB transaction — failure happens before any TX
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(nil, repository.ErrNotFound)
 
 	_, err := svc.Login(context.Background(), validLoginRequest())
 
 	assert.ErrorIs(t, err, service.ErrInvalidCredentials)
-	require.NoError(t, dbMock.ExpectationsWereMet())
-}
-
-func TestLogin_AccountLocked_ReturnsErrAccountLocked(t *testing.T) {
-	db, dbMock := newMockDB(t)
-	userRepo := new(mockUserRepo)
-	tokenRepo := new(mockAuthTokenRepo)
-	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
-
-	userID := uuid.New()
-	user := &model.User{Email: "john@example.com", IsLocked: true}
-	user.ID = userID
-
-	dbMock.ExpectBegin()
-	dbMock.ExpectCommit() // TX commits (no-op) — loginErr carries ErrAccountLocked
-
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
-		Return(user, nil)
-
-	_, err := svc.Login(context.Background(), validLoginRequest())
-
-	assert.ErrorIs(t, err, service.ErrAccountLocked)
-	require.NoError(t, dbMock.ExpectationsWereMet())
+	userRepo.AssertExpectations(t)
 }
 
 func TestLogin_WrongPassword_ReturnsErrInvalidCredentials(t *testing.T) {
-	db, dbMock := newMockDB(t)
+	db, _ := newMockDB(t)
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
-	// password hash for "correct-password", not "secret123"
+	// hash for "correct-password", request sends "secret123"
 	hash, err := bcryptHash("correct-password")
 	require.NoError(t, err)
 	user := &model.User{
-		Email:               "john@example.com",
-		PasswordHash:        hash,
-		FailedLoginAttempts: 0,
-		IsLocked:            false,
+		Email:        "john@example.com",
+		PasswordHash: hash,
 	}
 	user.ID = userID
 
-	dbMock.ExpectBegin()
-	dbMock.ExpectCommit() // TX commits so UpdateLoginAttempts persists
-
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	// No DB transaction — failure happens before any TX
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(user, nil)
-	// wrong password → attempts=1, locked=false
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 1, false).
-		Return(nil)
 
 	_, err = svc.Login(context.Background(), validLoginRequest())
 
 	assert.ErrorIs(t, err, service.ErrInvalidCredentials)
-	require.NoError(t, dbMock.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
-}
-
-func TestLogin_WrongPassword_AtMaxAttempts_ReturnsErrAccountLocked(t *testing.T) {
-	db, dbMock := newMockDB(t)
-	userRepo := new(mockUserRepo)
-	tokenRepo := new(mockAuthTokenRepo)
-	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
-
-	userID := uuid.New()
-	hash, err := bcryptHash("correct-password")
-	require.NoError(t, err)
-	// already at 4 failed attempts; one more will hit the limit of 5
-	user := &model.User{
-		Email:               "john@example.com",
-		PasswordHash:        hash,
-		FailedLoginAttempts: 4,
-		IsLocked:            false,
-	}
-	user.ID = userID
-
-	dbMock.ExpectBegin()
-	dbMock.ExpectCommit() // TX commits so UpdateLoginAttempts (is_locked=true) persists
-
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
-		Return(user, nil)
-	// attempts=5, locked=true
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 5, true).
-		Return(nil)
-
-	_, err = svc.Login(context.Background(), validLoginRequest())
-
-	assert.ErrorIs(t, err, service.ErrAccountLocked)
-	require.NoError(t, dbMock.ExpectationsWereMet())
-	userRepo.AssertExpectations(t)
-}
-
-func TestLogin_UpdateAttemptsError_ReturnsError(t *testing.T) {
-	db, dbMock := newMockDB(t)
-	userRepo := new(mockUserRepo)
-	tokenRepo := new(mockAuthTokenRepo)
-	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
-
-	userID := uuid.New()
-	hash, err := bcryptHash("secret123")
-	require.NoError(t, err)
-	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsLocked: false}
-	user.ID = userID
-
-	dbMock.ExpectBegin()
-	dbMock.ExpectRollback()
-
-	dbErr := errors.New("db update failed")
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
-		Return(user, nil)
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
-		Return(dbErr)
-
-	_, err = svc.Login(context.Background(), validLoginRequest())
-
-	assert.Error(t, err)
-	require.NoError(t, dbMock.ExpectationsWereMet())
 }
 
 func TestLogin_CreateAuthTokenError_ReturnsError(t *testing.T) {
@@ -419,22 +328,20 @@ func TestLogin_CreateAuthTokenError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
 	require.NoError(t, err)
-	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsLocked: false, IsVerified: true, Role: "customer"}
+	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsVerified: true, Role: "customer"}
 	user.ID = userID
 
 	dbMock.ExpectBegin()
 	dbMock.ExpectRollback()
 
 	dbErr := errors.New("token insert failed")
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(user, nil)
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
-		Return(nil)
 	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(dbErr)
 
@@ -450,7 +357,7 @@ func TestRefresh_Success(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	rawToken := "some-raw-refresh-token"
@@ -480,7 +387,7 @@ func TestRefresh_TokenNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
 		Return(nil, repository.ErrTokenNotFound)
@@ -495,7 +402,7 @@ func TestRefresh_DBError_ReturnsError(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	dbErr := errors.New("connection lost")
 	tokenRepo.On("FindByHash", mock.Anything, mock.AnythingOfType("string")).
@@ -511,7 +418,7 @@ func TestRefresh_UserNotFound_ReturnsErrInvalidToken(t *testing.T) {
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	authToken := &model.AuthToken{
@@ -563,7 +470,7 @@ func TestLogout_Success_BlacklistsJTIAndRevokesRefreshTokens(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	token := mintToken(t, privKey, userID.String())
 
@@ -581,7 +488,7 @@ func TestLogout_Success_BlacklistsJTIAndRevokesRefreshTokens(t *testing.T) {
 
 func TestLogout_InvalidToken_ReturnsErrInvalidToken(t *testing.T) {
 	_, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(nil, nil, nil, nil, nil, nil, nil, nil, nil, pubKey, nil, "")
+	svc := service.NewAuthService(nil, nil, nil, nil, nil, nil, nil, nil, nil, pubKey, nil, "", nil)
 
 	err := svc.Logout(context.Background(), "not.a.valid.jwt")
 
@@ -592,7 +499,7 @@ func TestLogout_BlacklistError_ReturnsError(t *testing.T) {
 	bl := new(mockBlacklist)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, nil, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(nil, nil, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	token := mintToken(t, privKey, userID.String())
 	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(errors.New("redis down"))
@@ -608,7 +515,7 @@ func TestLogout_RevokeByUserIDError_ReturnsError(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, nil, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	token := mintToken(t, privKey, userID.String())
 	bl.On("Add", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil)
@@ -670,13 +577,13 @@ func (m *mockAttemptCounter) Delete(ctx context.Context, email string) error {
 
 var _ loginattempt.Counter = (*mockAttemptCounter)(nil)
 
-// ─── Login: Redis pre-check and post-TX counter tests ─────────────────────────
+// ─── Login: Redis pre-check and post-verify counter tests ────────────────────
 
 func TestLogin_RedisPreCheck_BlocksAtMax(t *testing.T) {
 	counter := new(mockAttemptCounter)
 	privKey, pubKey := generateTestRSAKey(t)
 	// No DB needed — pre-check should abort before any DB call
-	svc := service.NewAuthService(nil, nil, nil, nil, nil, counter, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(nil, nil, nil, nil, nil, counter, nil, nil, privKey, pubKey, nil, "", nil)
 
 	counter.On("Get", mock.Anything, "john@example.com").Return(int64(5), nil)
 
@@ -687,38 +594,31 @@ func TestLogin_RedisPreCheck_BlocksAtMax(t *testing.T) {
 }
 
 func TestLogin_IncrementsRedisCounterOnBadPassword(t *testing.T) {
-	db, dbMock := newMockDB(t)
+	db, _ := newMockDB(t)
 	userRepo := new(mockUserRepo)
 	tokenRepo := new(mockAuthTokenRepo)
 	counter := new(mockAttemptCounter)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, counter, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, counter, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("correct-password")
 	require.NoError(t, err)
 	user := &model.User{
-		Email:               "john@example.com",
-		PasswordHash:        hash,
-		FailedLoginAttempts: 0,
-		IsLocked:            false,
+		Email:        "john@example.com",
+		PasswordHash: hash,
 	}
 	user.ID = userID
 
-	dbMock.ExpectBegin()
-	dbMock.ExpectCommit() // TX commits so UpdateLoginAttempts persists
-
+	// No DB transaction — bad password returns before any TX
 	counter.On("Get", mock.Anything, "john@example.com").Return(int64(0), nil)
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(user, nil)
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 1, false).
-		Return(nil)
 	counter.On("Increment", mock.Anything, "john@example.com").Return(int64(1), nil)
 
 	_, err = svc.Login(context.Background(), validLoginRequest())
 
 	assert.ErrorIs(t, err, service.ErrInvalidCredentials)
-	require.NoError(t, dbMock.ExpectationsWereMet())
 	counter.AssertExpectations(t)
 }
 
@@ -729,7 +629,7 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 	counter := new(mockAttemptCounter)
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, sc, counter, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, sc, counter, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	hash, err := bcryptHash("secret123")
@@ -737,7 +637,6 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 	user := &model.User{
 		Email:      "john@example.com",
 		Role:       "customer",
-		IsLocked:   false,
 		IsVerified: true,
 		Profile:    &model.UserProfile{FirstName: "John", LastName: "Doe"},
 	}
@@ -748,10 +647,8 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 	dbMock.ExpectCommit()
 
 	counter.On("Get", mock.Anything, "john@example.com").Return(int64(0), nil)
-	userRepo.On("FindByEmailForUpdate", mock.Anything, mock.Anything, "john@example.com").
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
 		Return(user, nil)
-	userRepo.On("UpdateLoginAttempts", mock.Anything, mock.Anything, userID, 0, false).
-		Return(nil)
 	tokenRepo.On("Create", mock.Anything, mock.Anything, mock.AnythingOfType("*model.AuthToken")).
 		Return(nil)
 	counter.On("Delete", mock.Anything, "john@example.com").Return(nil)
@@ -767,6 +664,31 @@ func TestLogin_DeletesRedisCounterAndSetsSessionOnSuccess(t *testing.T) {
 	sc.AssertExpectations(t)
 }
 
+func TestLogin_BcryptOverload_ReturnsErrBcryptOverload(t *testing.T) {
+	db, _ := newMockDB(t)
+	userRepo := new(mockUserRepo)
+	tokenRepo := new(mockAuthTokenRepo)
+	privKey, pubKey := generateTestRSAKey(t)
+
+	// Pool with zero-capacity queue and no workers started → Verify always returns ErrBcryptOverload
+	pool := password.NewPool(0)
+
+	svc := service.NewAuthService(userRepo, tokenRepo, db, nil, nil, nil, nil, nil, privKey, pubKey, nil, "", pool)
+
+	userID := uuid.New()
+	hash, err := bcryptHash("secret123")
+	require.NoError(t, err)
+	user := &model.User{Email: "john@example.com", PasswordHash: hash, IsVerified: true}
+	user.ID = userID
+
+	userRepo.On("FindByEmailWithProfile", mock.Anything, "john@example.com").
+		Return(user, nil)
+
+	_, err = svc.Login(context.Background(), validLoginRequest())
+
+	assert.ErrorIs(t, err, service.ErrBcryptOverload)
+}
+
 // ─── Refresh: session cache hit ───────────────────────────────────────────────
 
 func TestRefresh_UsesSessionCacheOnHit(t *testing.T) {
@@ -774,7 +696,7 @@ func TestRefresh_UsesSessionCacheOnHit(t *testing.T) {
 	tokenRepo := new(mockAuthTokenRepo)
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
-	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, sc, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(userRepo, tokenRepo, nil, nil, sc, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	userID := uuid.New()
 	authToken := &model.AuthToken{
@@ -809,7 +731,7 @@ func TestLogout_DeletesSessionCache(t *testing.T) {
 	sc := new(mockSessionCache)
 	privKey, pubKey := generateTestRSAKey(t)
 	userID := uuid.New()
-	svc := service.NewAuthService(nil, tokenRepo, nil, bl, sc, nil, nil, nil, privKey, pubKey, nil, "")
+	svc := service.NewAuthService(nil, tokenRepo, nil, bl, sc, nil, nil, nil, privKey, pubKey, nil, "", nil)
 
 	token := mintToken(t, privKey, userID.String())
 

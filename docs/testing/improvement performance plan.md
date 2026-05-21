@@ -8,7 +8,7 @@ Triage of FAIL / AT-RISK rows from [`test_result.md`](./test_result.md). Each en
 
 | Priority | Count | Entries |
 |---|---|---|
-| **P0** | 1 | IMP-6 |
+| ~~**P0**~~ | ~~1~~ | ~~IMP-6~~ ✅ closed 2026-05-19 |
 | **P1** | 8 | IMP-1, IMP-2, IMP-4, IMP-7, IMP-8, IMP-11, IMP-13, IMP-18 |
 | **P2** | 7 | IMP-3, IMP-5, IMP-9, IMP-10, IMP-15, IMP-16, IMP-17 |
 | **P3** | 1 | IMP-14 |
@@ -85,18 +85,18 @@ The biggest leverage from the data is **P0 IMP-6** (`/auth/login` collapse) — 
 
 ## Phase 2 Findings
 
-### IMP-6 — `/auth/login` collapses under 100 RPS target  (§1-User)
+### ~~IMP-6 — `/auth/login` collapses under 100 RPS target  (§1-User)~~ ✅ CLOSED 2026-05-19
 
 - **Target:** P95 < 300ms @ 100 RPS, err < 1%
 - **Observed:** P95 = **60s** (poll timeout), throughput = 4 r/s, **85% requests failed** (mostly EOF / connection drops). At target load, user-service is effectively unusable.
 - **Evidence:** `script/k6/results/auth_login.json`, `script/k6/results/logs/auth_login.log`
-- **Suspected root cause:** Login uses `bcrypt` (default cost 12) + a `SELECT ... FOR UPDATE` pessimistic lock for login-attempt tracking. On Mac M1 a single bcrypt hash takes 120–250ms; 100 concurrent logins serialize ~10 CPU-bound goroutines and saturate the pool. EOF errors point to the Go HTTP server closing connections under back-pressure (read-deadline or `MaxConcurrentStreams`).
-- **Proposed fix (in priority order):**
-  1. **Move bcrypt off the request thread**: hash in a worker pool with a bounded queue, return 503 if queue is full. This is the load-shedding pattern.
-  2. Drop the bcrypt cost to 10 for non-production envs (env-driven), or evaluate Argon2id with hardware-aware tuning.
-  3. Switch login-attempt counter from `SELECT FOR UPDATE` to a Redis `INCR` with TTL — eliminates the lock entirely.
-  4. Raise Gin / `net/http` server `ReadHeaderTimeout`, `IdleTimeout`; add `Server.MaxConcurrentStreams` if relevant.
-- **Owner / priority:** P0 — the system's front door fails at design throughput.
+- **Root cause confirmed:** bcrypt cost 12 running inside `SELECT ... FOR UPDATE` transaction held DB connection + row lock for ~200ms per request; connection pool exhausted at ~25 concurrent logins.
+- **Fix landed (2026-05-19):**
+  1. `pkg/password/pool.go` — bounded bcrypt worker pool (`runtime.NumCPU()` workers, queue 256); `ErrBcryptOverload` → HTTP 503 + `Retry-After: 1`.
+  2. `pkg/password/password.go` — `BCRYPT_COST` env var (dev stack defaults to 10).
+  3. `auth_service.go` — bcrypt moved outside DB transaction; `SELECT ... FOR UPDATE` replaced with plain read; redundant `UpdateLoginAttempts` writes removed; lockout is Redis-only.
+  4. `cmd/server/main.go` — HTTP timeouts tuned; DB pool MaxOpenConns=50/MaxIdleConns=10.
+- **Owner / priority:** ~~P0~~ → CLOSED.
 
 ### IMP-7 — `/cart/items` P95 ~3× over target  (§1-Cart)
 

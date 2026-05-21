@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,8 +17,10 @@ import (
 	segkafka "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 	tcKafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	gormpg "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -296,12 +299,16 @@ func TestDuplicateDeliveryIdempotency(t *testing.T) {
 		tcpostgres.WithDatabase("ecommerce_payments"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForListeningPort("5432/tcp").WithStartupTimeout(30*time.Second),
+		),
 	)
 	require.NoError(t, err, "start Postgres container")
 	t.Cleanup(func() { _ = pgCtr.Terminate(ctx) })
 
 	dsn, err := pgCtr.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
+	dsn = strings.Replace(dsn, "::1", "127.0.0.1", 1) // force IPv4 on macOS
 
 	db, err := gorm.Open(gormpg.Open(dsn), &gorm.Config{
 		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
@@ -315,6 +322,12 @@ func TestDuplicateDeliveryIdempotency(t *testing.T) {
 	repo := repository.NewPaymentRepository(db)
 	svc := service.NewPaymentService(repo, &instantGateway{})
 	startConsumer(t, testCfg(brokerAddr), svc)
+
+	// Allow the consumer time to join the Kafka consumer group and receive
+	// its partition assignment before we publish test messages. Without this
+	// sleep, messages published in the narrow window between consumer.Run()
+	// starting and the first poll completing may be missed on some platforms.
+	time.Sleep(3 * time.Second)
 
 	// Publish the same event 3 times.
 	orderID := uuid.New()
@@ -340,8 +353,10 @@ func TestDuplicateDeliveryIdempotency(t *testing.T) {
 		}))
 	}
 
-	// Allow all 3 deliveries to be processed (zero gateway latency → fast).
-	time.Sleep(3 * time.Second)
+	// Allow all 3 deliveries to be processed. Zero gateway latency means
+	// processing is fast, but the consumer poll cycle (MaxWait 500ms) plus
+	// message deserialization and DB write adds a few seconds in CI.
+	time.Sleep(8 * time.Second)
 
 	// Exactly 1 payment row must exist.
 	var paymentCount int64

@@ -16,6 +16,11 @@ async def lifespan(app: FastAPI):
     global _model
     loop = asyncio.get_event_loop()
     _model = await loop.run_in_executor(None, SentenceTransformer, MODEL_NAME)
+    # Warmup: initialize inference runtime before first user request
+    await loop.run_in_executor(
+        None,
+        lambda: _model.encode(["warmup"], normalize_embeddings=True)
+    )
     yield
     _model = None
 

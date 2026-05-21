@@ -83,7 +83,8 @@ func newInput() service.ProcessPaymentInput {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 // TestProcessPayment_IdempotentReplay verifies that when the DB signals a duplicate
-// idempotency key, the service returns the existing payment without calling the gateway.
+// idempotency key and the existing payment is terminal, the service returns it
+// without calling the gateway (true idempotent replay).
 func TestProcessPayment_IdempotentReplay(t *testing.T) {
 	repo := &mockRepo{}
 	gw := &mockGateway{}
@@ -107,6 +108,50 @@ func TestProcessPayment_IdempotentReplay(t *testing.T) {
 	assert.Equal(t, existing.ID, result.ID)
 	assert.Equal(t, model.PaymentStatusCompleted, result.Status)
 	gw.AssertNotCalled(t, "Charge")
+	repo.AssertExpectations(t)
+}
+
+// TestProcessPayment_IdempotentResumePending verifies that when the DB signals a duplicate
+// idempotency key but the existing payment is still PENDING (service was killed mid-gateway
+// call), the service retries the gateway using the existing payment ID and completes it.
+func TestProcessPayment_IdempotentResumePending(t *testing.T) {
+	repo := &mockRepo{}
+	gw := &mockGateway{}
+	svc := service.NewPaymentService(repo, gw)
+
+	in := newInput()
+	txnID := "MOCK-resume-xyz"
+	pendingPayment := &model.Payment{
+		ID:             uuid.New(),
+		IdempotencyKey: in.IdempotencyKey,
+		Amount:         in.Amount,
+		Currency:       in.Currency,
+		Status:         model.PaymentStatusPending,
+	}
+	completedPayment := &model.Payment{
+		ID:               pendingPayment.ID,
+		IdempotencyKey:   in.IdempotencyKey,
+		Status:           model.PaymentStatusCompleted,
+		GatewayReference: txnID,
+	}
+
+	repo.On("Create", mock.Anything, mock.AnythingOfType("*model.Payment"), mock.AnythingOfType("*model.PaymentHistory")).
+		Return(repository.ErrDuplicateIdempotencyKey)
+	repo.On("FindByIdempotencyKey", mock.Anything, in.IdempotencyKey).
+		Return(pendingPayment, nil)
+	gw.On("Charge", mock.Anything, in.Amount, in.Currency, pendingPayment.ID.String()).
+		Return(txnID, nil)
+	repo.On("UpdateStatus", mock.Anything, pendingPayment.ID, model.PaymentStatusCompleted, txnID, "gateway approved").
+		Return(nil)
+	repo.On("FindByID", mock.Anything, pendingPayment.ID).
+		Return(completedPayment, nil)
+
+	result, err := svc.ProcessPayment(context.Background(), in)
+
+	require.NoError(t, err)
+	assert.Equal(t, pendingPayment.ID, result.ID)
+	assert.Equal(t, model.PaymentStatusCompleted, result.Status)
+	gw.AssertExpectations(t)
 	repo.AssertExpectations(t)
 }
 
@@ -169,8 +214,8 @@ func TestProcessPayment_GatewayDecline(t *testing.T) {
 }
 
 // TestProcessPayment_GatewayTimeout verifies that when the 5 s gateway deadline
-// fires, the service propagates the error and leaves the payment in PENDING
-// (UpdateStatus must NOT be called — Week 11 retry/DLQ will handle PENDING rows).
+// fires, the service propagates the error. UpdateStatus must NOT be called —
+// Kafka redelivery will re-enter via the PENDING-resume path in ProcessPayment.
 func TestProcessPayment_GatewayTimeout(t *testing.T) {
 	repo := &mockRepo{}
 	gw := &mockGateway{}

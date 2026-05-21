@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/hungCS22hcmiu/ecommrece-system/cart-service/internal/middleware"
 )
 
@@ -30,24 +32,65 @@ type ProductClient interface {
 	GetProduct(ctx context.Context, productID int64) (*ProductInfo, error)
 }
 
+const productCacheTTL = 5 * time.Second
+
+// productCache is the narrow Redis interface used inside this package.
+// Tests supply a map-backed fake; production uses redisProductCache.
+type productCache interface {
+	get(ctx context.Context, id int64) (*ProductInfo, error)
+	set(ctx context.Context, id int64, info *ProductInfo, ttl time.Duration) error
+}
+
+type redisProductCache struct{ rdb *redis.Client }
+
+func (c *redisProductCache) get(ctx context.Context, id int64) (*ProductInfo, error) {
+	val, err := c.rdb.Get(ctx, fmt.Sprintf("product:v:%d", id)).Result()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil // miss
+	}
+	if err != nil {
+		return nil, err
+	}
+	var info ProductInfo
+	if jsonErr := json.Unmarshal([]byte(val), &info); jsonErr != nil {
+		return nil, jsonErr
+	}
+	return &info, nil
+}
+
+func (c *redisProductCache) set(ctx context.Context, id int64, info *ProductInfo, ttl time.Duration) error {
+	b, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	return c.rdb.Set(ctx, fmt.Sprintf("product:v:%d", id), b, ttl).Err()
+}
+
 type productClient struct {
 	baseURL    string
 	httpClient *http.Client
 	cb         *CircuitBreaker
+	cache      productCache
 }
 
-func NewProductClient(baseURL string) ProductClient {
+func NewProductClient(baseURL string, rdb *redis.Client) ProductClient {
 	return &productClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
 		// Open after 5 consecutive failures; stay open for 30 seconds.
-		cb: NewCircuitBreaker(5, 30*time.Second),
+		cb:    NewCircuitBreaker(5, 30*time.Second),
+		cache: &redisProductCache{rdb: rdb},
 	}
 }
 
 func (c *productClient) GetProduct(ctx context.Context, productID int64) (*ProductInfo, error) {
+	// Cache hit: return immediately, skip CB (no network involved).
+	if c.cache != nil {
+		if cached, err := c.cache.get(ctx, productID); err == nil && cached != nil {
+			return cached, nil
+		}
+	}
+
 	if !c.cb.Allow() {
 		return nil, ErrServiceUnavailable
 	}
@@ -128,6 +171,7 @@ func (c *productClient) GetProduct(ctx context.Context, productID int64) (*Produ
 		}
 
 		c.cb.RecordSuccess()
+		_ = c.cache.set(ctx, productID, &result.Data, productCacheTTL)
 		return &result.Data, nil
 	}
 

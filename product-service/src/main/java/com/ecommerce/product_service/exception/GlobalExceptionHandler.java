@@ -49,6 +49,12 @@ public class GlobalExceptionHandler {
         return ApiResponse.error("INSUFFICIENT_STOCK", ex.getMessage());
     }
 
+    @ExceptionHandler(StockContentionException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ApiResponse<?> handleStockContention(StockContentionException ex) {
+        return ApiResponse.error("STOCK_CONTENTION", ex.getMessage());
+    }
+
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {

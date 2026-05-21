@@ -1,18 +1,24 @@
 package com.ecommerce.order_service.config;
 
+import org.slf4j.MDC;
 import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
 import org.springframework.aop.interceptor.SimpleAsyncUncaughtExceptionHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.scheduling.annotation.AsyncConfigurer;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 @EnableAsync
+@EnableScheduling
+@EnableRetry
 public class AsyncConfig implements AsyncConfigurer {
 
     /**
@@ -33,6 +39,17 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
+        executor.setTaskDecorator(runnable -> {
+            Map<String, String> mdcContext = MDC.getCopyOfContextMap();
+            return () -> {
+                try {
+                    if (mdcContext != null) MDC.setContextMap(mdcContext);
+                    runnable.run();
+                } finally {
+                    MDC.clear();
+                }
+            };
+        });
         executor.initialize();
         return executor;
     }

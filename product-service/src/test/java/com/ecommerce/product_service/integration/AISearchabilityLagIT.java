@@ -196,7 +196,7 @@ class AISearchabilityLagIT {
         long t0 = System.currentTimeMillis();
         while (System.currentTimeMillis() - t0 < POLL_TIMEOUT_MS) {
             ResponseEntity<String> raw = restTemplate.getForEntity(
-                    "/api/v1/products/ai-search?q=" + tag + "&limit=10", String.class);
+                    "/api/v1/products/ai-search?q=" + tag + "&limit=" + (ITERATIONS + 20), String.class);
             if (raw.getStatusCode().is2xxSuccessful() && raw.getBody() != null) {
                 ApiResponse<AISearchResponse> resp = parseResponse(raw.getBody());
                 if (resp != null && resp.getData() != null

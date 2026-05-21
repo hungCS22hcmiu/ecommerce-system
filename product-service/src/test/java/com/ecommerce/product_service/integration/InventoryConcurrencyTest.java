@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -31,12 +30,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves that optimistic locking (@Version + @Retryable) correctly handles
- * concurrent stock reservations without lost updates.
+ * Proves that the conditional UPDATE strategy correctly handles concurrent stock
+ * reservations without lost updates or false OOS errors.
  *
- * Interview talking point: Without @Version, multiple threads would read the same
- * stockReserved value, all increment it, and all save — a classic lost update.
- * With @Version, only one writer wins per round; others retry with fresh data.
+ * Each reservation executes a single atomic SQL UPDATE with a WHERE guard:
+ *   UPDATE products SET stock_reserved = stock_reserved + qty
+ *   WHERE id = ? AND (stock_quantity - stock_reserved) >= qty
+ * The DB serializes concurrent writes at the row level — no retry loop needed.
  */
 @SpringBootTest
 @Testcontainers
@@ -88,12 +88,13 @@ class InventoryConcurrencyTest {
 
     /**
      * 10 threads compete to reserve 1 unit each from a stock of 5.
-     * Exactly 5 succeed. The other 5 fail — either with InsufficientStockException
-     * (stock gone by the time they retry) or ObjectOptimisticLockingFailureException
-     * (all 3 retry attempts exhausted under high contention). Both are valid failures.
+     * Exactly 5 succeed. The other 5 fail with InsufficientStockException (genuine OOS).
      *
-     * Key assertion: final stockReserved == 5 and exactly 5 RESERVE movements.
-     * This proves @Version prevents lost updates regardless of which failure mode occurs.
+     * With conditional UPDATE, the DB serializes concurrent writes at the row level.
+     * The 5 threads that arrive after stock is exhausted get 0 rows updated and
+     * immediately receive InsufficientStockException — no retries, no false failures.
+     *
+     * Core invariant: final stockReserved == 5 and exactly 5 RESERVE movements.
      */
     @Test
     void concurrent_reservations_exactly_five_succeed() throws InterruptedException {
@@ -112,10 +113,7 @@ class InventoryConcurrencyTest {
                 try {
                     inventoryService.reserveStock(productId, 1, orderId);
                     successCount.incrementAndGet();
-                } catch (InsufficientStockException | ObjectOptimisticLockingFailureException e) {
-                    // InsufficientStockException: stock was exhausted before this thread's retry
-                    // ObjectOptimisticLockingFailureException: retries exhausted under high contention
-                    // Both are valid "didn't get the stock" outcomes
+                } catch (InsufficientStockException e) {
                     failCount.incrementAndGet();
                 }
                 return null;
@@ -151,20 +149,16 @@ class InventoryConcurrencyTest {
     /**
      * 3 threads compete with ample stock (20 units). All 3 must succeed.
      *
-     * Why 3 threads with maxAttempts=3: Round 1 — 1 wins, 2 retry.
-     * Round 2 — 1 wins, 1 retries. Round 3 — last wins. All done.
-     * Mathematically guaranteed to converge with 3 threads and 3 retries.
-     *
-     * This proves @Retryable correctly handles OptimisticLockingFailureException
-     * by re-reading fresh data and retrying the entire read-check-write cycle.
+     * With conditional UPDATE each thread's UPDATE either succeeds atomically or
+     * fails immediately (no retries). With 20 units and only 3 threads reserving 1
+     * each, the condition is satisfied for all — no contention on the guard clause.
      */
     @Test
-    void retry_handles_optimistic_lock_all_succeed_when_stock_sufficient() throws InterruptedException {
+    void concurrent_reserve_all_succeed_when_stock_sufficient() throws InterruptedException {
         Product product = productRepository.findById(productId).orElseThrow();
         product.setStockQuantity(20);
         productRepository.save(product);
 
-        // 3 threads = 3 retry attempts: guaranteed to converge
         int threadCount = 3;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch startGate = new CountDownLatch(1);
@@ -173,7 +167,7 @@ class InventoryConcurrencyTest {
         List<Future<Void>> futures = new ArrayList<>();
 
         for (int i = 0; i < threadCount; i++) {
-            final String orderId = "order-retry-" + i;
+            final String orderId = "order-sufficient-" + i;
             futures.add(executor.submit(() -> {
                 startGate.await();
                 try {
@@ -197,7 +191,7 @@ class InventoryConcurrencyTest {
         }
         executor.shutdown();
 
-        // All 3 must succeed — @Retryable handled the version conflicts
+        // All 3 must succeed — conditional UPDATE handles concurrent writes without retries
         assertThat(successCount.get()).isEqualTo(threadCount);
 
         Product finalProduct = productRepository.findById(productId).orElseThrow();

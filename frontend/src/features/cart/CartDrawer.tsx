@@ -51,6 +51,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
           <h2 className="font-display text-lg text-fg-base">Your Cart</h2>
           <button
             type="button"
+            aria-label="Close cart"
             onClick={onClose}
             className="text-fg-subtle hover:text-fg-base transition-colors text-xl leading-none"
           >

@@ -92,7 +92,7 @@ func main() {
 	// ── Repositories, Client, Service ─────────────────────────────────────────
 	redisRepo := repository.NewRedisCartRepository(rdb)
 	cartRepo := repository.NewCartRepository(db)
-	productClient := client.NewProductClient(cfg.ProductServiceURL)
+	productClient := client.NewProductClient(cfg.ProductServiceURL, rdb)
 	cartSvc := service.NewCartService(redisRepo, cartRepo, productClient)
 
 	// ── Background Sync Worker ─────────────────────────────────────────────────

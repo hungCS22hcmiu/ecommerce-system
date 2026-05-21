@@ -64,12 +64,62 @@ apply_override() {
   cp "$ovr" docker-compose.override.yml
   info "applying override: $ovr (restarting payment-service)"
   docker compose up -d payment-service >/dev/null
+  # Wait for HTTP health check to pass
+  local healthy=0
   for _ in $(seq 1 30); do
-    if curl -fsS http://localhost:8003/health/ready >/dev/null 2>&1; then return 0; fi
+    if curl -fsS http://localhost:8003/health/ready >/dev/null 2>&1; then
+      healthy=1; break
+    fi
     sleep 1
   done
-  echo -e "${RED}payment-service did not become healthy${RESET}"
-  return 1
+  if [[ "$healthy" -eq 0 ]]; then
+    echo -e "${RED}payment-service did not become healthy${RESET}"
+    return 1
+  fi
+  # Wait for consumer group to reach STABLE state (partitions assigned)
+  info "payment-service healthy; waiting for Kafka consumer group to stabilize..."
+  local stable=0
+  for _ in $(seq 1 40); do
+    local state
+    state=$(docker exec ecommerce-kafka kafka-consumer-groups \
+      --bootstrap-server kafka:29092 \
+      --group payment-service --describe --state 2>/dev/null \
+      | awk 'NR>1 && /payment-service/ {print $5; exit}')
+    if [[ "$state" == "Stable" ]]; then
+      stable=1; break
+    fi
+    sleep 1
+  done
+  if [[ "$stable" -eq 0 ]]; then
+    info "consumer group did not reach Stable within 40s — falling back to 15s sleep"
+    sleep 15
+  else
+    info "consumer group Stable; waiting 3s buffer"
+    sleep 3
+  fi
+  # Wait for any existing Kafka backlog to drain (≤ 10 messages) before running
+  # load tests. Phase 2 throughput tests can leave thousands of messages in
+  # orders.created, causing Phase 1 saga orders to queue behind them.
+  info "waiting for Kafka lag to drain (target: total lag ≤ 10)..."
+  local drain=0
+  for _ in $(seq 1 120); do
+    local total_lag
+    total_lag=$(docker exec ecommerce-kafka kafka-consumer-groups \
+      --bootstrap-server kafka:29092 \
+      --group payment-service --describe 2>/dev/null \
+      | awk 'NR>1 && /orders.created/ {sum += $6} END {print sum+0}')
+    if [[ "${total_lag:-9999}" -le 10 ]]; then
+      drain=1; break
+    fi
+    info "  lag=${total_lag}, waiting..."
+    sleep 3
+  done
+  if [[ "$drain" -eq 0 ]]; then
+    info "Kafka lag did not drain within 6 min — proceeding anyway"
+  else
+    info "Kafka lag drained; proceeding"
+  fi
+  return 0
 }
 
 revert_override() {

@@ -34,7 +34,8 @@ public class AISearchServiceImpl implements AISearchService {
     private final JdbcTemplate jdbcTemplate;
 
     @Override
-    @Cacheable(value = "aiSearch", key = "{#query, #limit, #categoryId, #sellerId}")
+    @Cacheable(value = "aiSearch", key = "{#query, #limit, #categoryId, #sellerId}",
+               unless = "#result.results().isEmpty()")
     public AISearchResponse search(String query, int limit, Long categoryId, UUID sellerId) {
         if (query == null || query.trim().length() < 2) {
             throw new IllegalArgumentException("Query must be at least 2 characters");

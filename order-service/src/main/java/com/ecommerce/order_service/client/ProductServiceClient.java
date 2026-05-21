@@ -5,8 +5,11 @@ import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -32,9 +35,17 @@ public class ProductServiceClient {
             }
             log.error("Failed to reserve stock for productId={}, status={}", productId, e.getStatusCode());
             throw new IllegalStateException("Failed to reserve stock for product " + productId + ": " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            log.warn("Product service returned {} for productId={}", e.getStatusCode(), productId);
+            throw new IllegalStateException("Failed to reserve stock for product " + productId + ": " + e.getMessage());
         }
     }
 
+    @Retryable(
+        retryFor = IllegalStateException.class,
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 100, multiplier = 2, maxDelay = 500)
+    )
     public StockResponse releaseStock(Long productId, int quantity, String referenceId) {
         String url = productServiceUrl + "/api/v1/inventory/" + productId + "/release";
         StockRequest request = new StockRequest(quantity, referenceId);
@@ -42,6 +53,9 @@ public class ProductServiceClient {
             return restTemplate.postForObject(url, request, StockResponse.class);
         } catch (HttpClientErrorException e) {
             log.error("Failed to release stock for productId={}, status={}", productId, e.getStatusCode());
+            throw new IllegalStateException("Failed to release stock for product " + productId + ": " + e.getMessage());
+        } catch (HttpServerErrorException e) {
+            log.warn("Product service returned {} releasing stock for productId={}", e.getStatusCode(), productId);
             throw new IllegalStateException("Failed to release stock for product " + productId + ": " + e.getMessage());
         }
     }

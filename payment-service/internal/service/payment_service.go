@@ -60,10 +60,21 @@ func (s *paymentService) ProcessPayment(ctx context.Context, in ProcessPaymentIn
 	}
 
 	if err := s.repo.Create(ctx, p, h); err != nil {
-		if errors.Is(err, repository.ErrDuplicateIdempotencyKey) {
-			return s.repo.FindByIdempotencyKey(ctx, in.IdempotencyKey)
+		if !errors.Is(err, repository.ErrDuplicateIdempotencyKey) {
+			return nil, err
 		}
-		return nil, err
+		existing, findErr := s.repo.FindByIdempotencyKey(ctx, in.IdempotencyKey)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if existing.Status != model.PaymentStatusPending {
+			// Already terminal (COMPLETED or FAILED) — idempotent return.
+			return existing, nil
+		}
+		// PENDING: the previous attempt was killed after creating the row but before
+		// completing the gateway call. Resume with the existing payment ID so the
+		// gateway call is retried (payment ID acts as gateway idempotency key).
+		p = existing
 	}
 
 	gwCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -76,7 +87,6 @@ func (s *paymentService) ProcessPayment(ctx context.Context, in ProcessPaymentIn
 				return nil, updateErr
 			}
 		} else {
-			// transient error (e.g. context deadline) — leave payment PENDING for retry/DLQ in Week 11
 			return nil, err
 		}
 	} else {

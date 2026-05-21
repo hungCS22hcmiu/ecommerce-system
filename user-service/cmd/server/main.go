@@ -27,6 +27,7 @@ import (
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/email"
 	jwtpkg "github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/jwt"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/loginattempt"
+	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/password"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/reset"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/session"
 	"github.com/hungCS22hcmiu/ecommrece-system/user-service/pkg/verification"
@@ -62,10 +63,9 @@ func main() {
 		slog.Error("failed to connect to postgres", "error", err)
 		os.Exit(1)
 	}
-	// Connection pool settings (proposal §5.3)
 	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(25)
-	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetMaxOpenConns(50)
+	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 	slog.Info("postgres connected", "dsn", cfg.DBHost+":"+cfg.DBPort+"/"+cfg.DBName)
 
@@ -126,7 +126,11 @@ func main() {
 	verificationStore := verification.New(rdb)
 	resetStore := reset.New(rdb)
 	emailSender := email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom)
-	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, verificationStore, emailSender, privateKey, publicKey, resetStore, cfg.AppURL)
+
+	bcryptPool := password.NewPool(256)
+	bcryptPool.Start()
+
+	authSvc := service.NewAuthService(userRepo, authTokenRepo, db, bl, sessionCache, attemptCounter, verificationStore, emailSender, privateKey, publicKey, resetStore, cfg.AppURL, bcryptPool)
 	authHandler := handler.NewAuthHandler(authSvc)
 	authMiddleware := middleware.Auth(publicKey, bl)
 
@@ -171,11 +175,12 @@ func main() {
 
 	// ── HTTP Server ───────────────────────────────────────────────────────────
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      router,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	// Start server in a goroutine so it doesn't block the shutdown logic below
@@ -202,6 +207,9 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 	}
+
+	// Stop bcrypt pool after all in-flight requests are done
+	bcryptPool.Stop()
 
 	// Close DB and Redis
 	sqlDB.Close()

@@ -141,16 +141,11 @@ describe('axios — 401 interceptor queue (§8.C)', () => {
   })
 
   it('on refresh failure, clears auth and redirects to /login', async () => {
-    // Refresh fails with 500 (not 401) so the interceptor's catch path fires
-    // cleanly without re-entering the refresh logic. NOTE — IMP candidate:
-    // /auth/refresh is NOT in the interceptor's bypass list (only /auth/login
-    // and /auth/register), so a 401 on refresh would re-enter the interceptor
-    // and deadlock; this 500 path side-steps that.
+    // After the IMP-18 fix, /auth/refresh is in isAuthEndpoint so a 401 on
+    // refresh no longer re-enters the interceptor — no deadlock, clean redirect.
     api.defaults.adapter = async (cfg: AxiosRequestConfig) => {
-      const url = cfg.url ?? ''
-      const status = url.includes('/auth/refresh') ? 500 : 401
-      const err: Error & { response?: unknown; config?: unknown } = new Error(`status ${status}`)
-      err.response = { data: {}, status, statusText: 'Err', headers: {}, config: cfg }
+      const err: Error & { response?: unknown; config?: unknown } = new Error('401 Unauthorized')
+      err.response = { data: {}, status: 401, statusText: 'Unauthorized', headers: {}, config: cfg }
       err.config = cfg
       throw err
     }

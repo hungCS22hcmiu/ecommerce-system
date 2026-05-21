@@ -7,11 +7,12 @@ import com.ecommerce.order_service.exception.InsufficientStockException;
 import com.ecommerce.order_service.exception.OrderAccessDeniedException;
 import com.ecommerce.order_service.exception.OrderNotFoundException;
 import com.ecommerce.order_service.kafka.OrderEventProducer;
-import com.ecommerce.order_service.kafka.event.OrderCreatedEvent;
 import com.ecommerce.order_service.model.*;
 import com.ecommerce.order_service.repository.OrderRepository;
 import com.ecommerce.order_service.repository.OrderStatusHistoryRepository;
+import com.ecommerce.order_service.repository.OutboxEventRepository;
 import com.ecommerce.order_service.service.impl.OrderServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -47,6 +48,8 @@ class OrderServiceImplTest {
     @Mock private OrderStateMachine stateMachine;
     @Mock private ProductServiceClient productServiceClient;
     @Mock private OrderEventProducer eventProducer;
+    @Mock private OutboxEventRepository outboxEventRepository;
+    @Mock private ObjectMapper objectMapper;
 
     @InjectMocks
     private OrderServiceImpl orderService;
@@ -143,7 +146,7 @@ class OrderServiceImplTest {
             assertThat(response.getUserId()).isEqualTo(saved.getUserId());
 
             verify(orderRepository).save(any(Order.class));
-            verify(eventProducer).publishOrderCreated(any(OrderCreatedEvent.class));
+            verify(outboxEventRepository).save(any(OutboxEvent.class));
         }
 
         @Test
@@ -178,7 +181,7 @@ class OrderServiceImplTest {
             // Nothing was reserved, so releaseStock must never be called
             verify(productServiceClient, never()).releaseStock(any(), anyInt(), any());
             verify(orderRepository, never()).save(any());
-            verify(eventProducer, never()).publishOrderCreated(any());
+            verify(outboxEventRepository, never()).save(any());
         }
 
         @Test
@@ -203,7 +206,7 @@ class OrderServiceImplTest {
         }
 
         @Test
-        void publishedEvent_containsCorrectOrderIdAndUserId() {
+        void outboxEvent_containsCorrectOrderId() {
             CreateOrderRequest request = buildCreateRequest(1);
             Order saved = buildOrderWithItems(OrderStatus.PENDING);
 
@@ -213,13 +216,9 @@ class OrderServiceImplTest {
 
             orderService.createOrder(userId, request);
 
-            ArgumentCaptor<OrderCreatedEvent> eventCaptor =
-                    ArgumentCaptor.forClass(OrderCreatedEvent.class);
-            verify(eventProducer).publishOrderCreated(eventCaptor.capture());
-
-            OrderCreatedEvent event = eventCaptor.getValue();
-            assertThat(event.getOrderId()).isEqualTo(saved.getId());
-            assertThat(event.getUserId()).isEqualTo(saved.getUserId());
+            ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+            verify(outboxEventRepository).save(captor.capture());
+            assertThat(captor.getValue().getOrderId()).isEqualTo(saved.getId());
         }
 
         @Test
