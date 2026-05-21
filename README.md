@@ -6,14 +6,14 @@ Distributed e-commerce backend built with Go, Java/Spring Boot, and Python. Six 
 
 | Service | Language | Port | Key Pattern |
 |---|---|---|---|
-| user-service | Go (Gin + GORM) | 8001 | Pessimistic lock · Redis sessions · RS256 JWT |
-| product-service | Java/Spring Boot | 8081 | Optimistic lock · Redis cache-aside · pgvector AI search · reviews/ratings |
-| cart-service | Go (Gin + GORM) | 8002 | Redis-first · WATCH/MULTI/EXEC |
-| order-service | Java/Spring Boot | 8082 | Pessimistic lock · Kafka publisher · notifications |
-| payment-service | Go (Gin) | 8003 | Idempotency key · Kafka saga · DLQ |
-| ai-service | Python (FastAPI) | 8000 | sentence-transformers sidecar · `POST /embed` |
+| user-service | Go (Gin + GORM) | 8001 | Bcrypt worker pool · Redis-only lockout · RS256 JWT |
+| product-service | Java/Spring Boot | 8081 | Conditional UPDATE (atomic stock) · Redis cache-aside · pgvector AI search · reviews/ratings |
+| cart-service | Go (Gin + GORM) | 8002 | Redis-first · WATCH/MULTI/EXEC · product-validation cache (5s TTL) |
+| order-service | Java/Spring Boot | 8082 | Transactional outbox → Kafka · async stock release · notifications |
+| payment-service | Go (Gin) | 8003 | Idempotency key · PENDING-resume · Kafka saga · DLQ |
+| ai-service | Python (FastAPI) | 9000 | sentence-transformers sidecar · `POST /embed` |
 | frontend | React 19 + Vite → Nginx | 3001 | TanStack Query · Zustand · JWT interceptor |
-| nginx | nginx:alpine | 80 | Reverse proxy · rate limiting · CORS |
+| nginx | nginx:alpine | 80 | Reverse proxy · rate limiting · CORS · dynamic DNS resolver |
 
 All external traffic enters through **port 80** (Nginx). Services are not directly exposed in production.
 
@@ -48,14 +48,14 @@ Sample credentials (from `script/sample_users.sql`):
 Browser → Nginx :80 → user-service   :8001  (auth, profiles, public seller profile)
                     → product-service:8081  (catalog, inventory, AI search, reviews)
                     → cart-service   :8002  (Redis-first cart)
-                    → order-service  :8082  (orders, notifications, Kafka publisher)
-                    → payment-service:8003  (Kafka consumer, saga)
+                    → order-service  :8082  (orders, notifications, transactional outbox)
+                    → payment-service:8003  (Kafka consumer, saga, PENDING-resume)
 
-product-service ──REST──▶  ai-service:8000          (embed query / write-through re-embed)
+product-service ──REST──▶  ai-service:9000          (embed query / write-through re-embed)
 product-service ──REST──▶  order-service:8082        (review notification, fire-and-forget)
 
-order-service   ──kafka──▶  orders.created            ──▶  payment-service
-payment-service ──kafka──▶  payments.completed/failed  ──▶  order-service
+order-service   ──outbox──▶  orders.created            ──▶  payment-service
+payment-service ──kafka───▶  payments.completed/failed  ──▶  order-service
 ```
 
 **Databases:** Single PostgreSQL instance, 5 logical databases (`ecommerce_users/products/carts/orders/payments`). Schemas auto-applied from `script/init-databases.sql` at container start.
@@ -164,7 +164,7 @@ Key variables (all documented in [`.env.example`](.env.example)):
 |---|---|---|
 | `PRODUCT_SERVICE_URL` | `http://product-service:8081` | cart-service, order-service |
 | `ORDER_SERVICE_URL` | `http://order-service:8082` | product-service (review notifications) |
-| `AI_SERVICE_URL` | `http://ai-service:8000` | product-service |
+| `AI_SERVICE_URL` | `http://ai-service:9000` | product-service |
 | `KAFKA_BROKERS` | `kafka:29092` | order-service, payment-service |
 | `JWT_PRIVATE_KEY_PATH` | `./keys/private.pem` | user-service |
 | `JWT_PUBLIC_KEY_PATH` | `./keys/public.pem` | cart-service, payment-service, order-service |
