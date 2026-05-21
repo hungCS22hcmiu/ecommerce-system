@@ -9,7 +9,7 @@
 | cart-service | Go (Gin + GORM) | 8002 | **Implemented** | Redis-first, WATCH/MULTI/EXEC · Redis product-validation cache (5s TTL) |
 | order-service | Java/Spring Boot | 8082 | **Implemented** | Pessimistic lock · Transactional outbox → Kafka · async stock release · notifications · seller order view |
 | payment-service | Go (Gin) | 8003 | **Implemented** | Idempotency key + DB UNIQUE + Kafka saga · PENDING-resume on restart |
-| ai-service | Python (FastAPI) | 8000 | **Implemented** | sentence-transformers sidecar, `POST /embed` |
+| ai-service | Python (FastAPI) | 9000 | **Implemented** | sentence-transformers sidecar, `POST /embed` |
 | frontend | React 19 + Vite → Nginx | 3001 | **Implemented** | TanStack Query, Zustand, JWT interceptor |
 | nginx | nginx:alpine | 80 | **Active** | Reverse proxy, rate limiting, CORS · resolver-based dynamic upstream DNS |
 
@@ -37,7 +37,7 @@ Databases auto-initialized via `script/init-databases.sql`.
 
 ## Architecture
 
-**Sync REST:** Cart → Product (`PRODUCT_SERVICE_URL`) · Product → ai-service (`AI_SERVICE_URL`) for embeddings · Product → Order (`ORDER_SERVICE_URL`) for review notifications (fire-and-forget)
+**Sync REST:** Cart → Product (`PRODUCT_SERVICE_URL`) · Product → ai-service (`AI_SERVICE_URL`, internal `http://ai-service:9000`) for embeddings · Product → Order (`ORDER_SERVICE_URL`) for review notifications (fire-and-forget)
 **Async Kafka saga:** `orders.created` → payment-service → `payments.completed/failed` → order-service. Broker: `kafka:29092`.
 **Databases:** Single Postgres, 5 logical DBs (`ecommerce_users/products/carts/orders/payments`). Cross-DB refs at app level only.
 **Redis:** user-service (sessions, JWT blacklist, login attempts) · cart-service (primary store + product-validation cache) · product-service (cache-aside)
@@ -141,7 +141,11 @@ Scripts (default port 80):
 `store/authStore.ts` — `accessToken` in memory (XSS-safe), `refreshToken` in localStorage.
 `features/payment/usePaymentStatus.ts` — `refetchInterval` returns `false` on terminal status (self-stopping poll).
 `features/products/useProductAISearch.ts` — TanStack Query, `enabled: q.length >= 2`, `staleTime: 60s`.
+`features/products/useProductListInfinite` — `useInfiniteQuery` hook for scroll-based pagination; used on ProductDetailPage for "More from [category]" section.
 `components/shared/NotificationBell.tsx` — clicks navigate: `productId` set → `/products/:id`; `orderId` set → `/orders/:id`.
 `components/shared/ReviewDialog.tsx` — multi-item panel: all order items shown simultaneously, per-item rating + comment, single Submit.
 `Dockerfile` — uses `npx vite build` directly (not `npm run build`) to skip `tsc -b` strict check on test files.
+**Cart:** `CartDrawer` has per-item checkboxes; "Proceed to Checkout" disabled until items selected; blocks cross-seller selection with inline error. `useCartMutations.addItem.onError` shows specific toasts per error code (SELLER_CANNOT_BUY_OWN_PRODUCT, INSUFFICIENT_STOCK, etc.).
+**OrderConfirmationPage:** on payment COMPLETED calls `removeItem` for each ordered product ID only (not `clearCart`), preserving items from other sellers.
+**ProductDetailPage:** back link resolves to product's own category (`← Back to [categoryName]`); "More from [category]" infinite-scroll section below reviews (IntersectionObserver sentinel, 200 px lookahead, 8 per page); `window.scrollTo(0,0)` on `id` change.
 **Pages added beyond plan:** CategoryBrowsePage · CategoryProductsPage · SellerShopPage · SellerOrdersPage · SellerOrderDetailPage.

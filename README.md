@@ -38,9 +38,9 @@ make db-seed
 The React frontend is available at **http://localhost:3001** and the API at **http://localhost/api/v1/...**.
 
 Sample credentials (from `script/sample_users.sql`):
-- Customer: `customer@example.com` / `password123`
-- Seller: `seller@example.com` / `password123`
-- Admin: `admin@example.com` / `password123`
+- Customer: `customer@example.com` / `Customer@123`
+- Seller: `seller@example.com` / `Seller@123`
+- Admin: `admin@example.com` / `Admin@123`
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Browser → Nginx :80 → user-service   :8001  (auth, profiles, public seller p
                     → order-service  :8082  (orders, notifications, Kafka publisher)
                     → payment-service:8003  (Kafka consumer, saga)
 
-product-service ──REST──▶  ai-service:8000          (embed query / write-through re-embed)
+product-service ──REST──▶  ai-service:9000          (embed query / write-through re-embed)
 product-service ──REST──▶  order-service:8082        (review notification, fire-and-forget)
 
 order-service   ──kafka──▶  orders.created            ──▶  payment-service
@@ -121,7 +121,7 @@ bash script/perf-baseline.sh     # single-threaded latency baseline
 |---|---|---|
 | `/` | Home — featured products | No |
 | `/products` | Product list with keyword + AI search, pagination | No |
-| `/products/:id` | Product detail — gallery, reviews, ratings | No |
+| `/products/:id` | Product detail — gallery, reviews, ratings, infinite-scroll related products | No |
 | `/categories` | Category browse grid | No |
 | `/categories/:slug` | Products filtered by category | No |
 | `/sellers/:id` | Public seller shop page | No |

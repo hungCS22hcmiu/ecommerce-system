@@ -53,6 +53,8 @@ pprof is exposed on `:6060` (internal only — must not be publicly exposed).
 
 **Idempotency:** `UNIQUE(idempotency_key)` constraint on `payments` table. Kafka's at-least-once delivery is safe — redelivered messages produce a DB unique violation, which is treated as "already processed."
 
+**PENDING-resume:** If the service is killed mid-gateway call, the payment row exists with `status=PENDING` and no Kafka outcome has been published. On Kafka redelivery, `ProcessPayment` detects `ErrDuplicateIdempotencyKey` with an existing PENDING row and re-attempts the gateway using the same payment ID (no double-charge). If `publishOutcome` still sees PENDING after the retry, the Kafka offset is **not committed** — forcing another redelivery rather than silently dropping the message.
+
 **Consumer lag:** logged every 30s. `slog.Warn` if lag exceeds 10,000 messages.
 
 **Graceful shutdown:** 30-second deadline covers consumer drain + HTTP server drain. If exceeded, logs "shutdown deadline exceeded."

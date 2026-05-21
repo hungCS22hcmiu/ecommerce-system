@@ -32,13 +32,17 @@ docker exec ecommerce-ai-service sh -c "cd /app && pytest tests/ -v"
 Populates `products.embedding` for all ACTIVE products with `embedding IS NULL`:
 
 ```bash
+# Via docker compose (recommended — runs in a fresh container then exits)
+docker compose run --rm ai-service python scripts/embed_products.py
+
+# Or exec into a running container
 docker exec ecommerce-ai-service python scripts/embed_products.py
 ```
 
 Force re-embed all ACTIVE rows:
 
 ```bash
-docker exec ecommerce-ai-service python scripts/embed_products.py --force
+docker compose run --rm ai-service python scripts/embed_products.py --force
 ```
 
 ## Nightly refresh (cron)
@@ -50,4 +54,4 @@ To keep embeddings current after bulk imports, schedule a nightly backfill:
 0 2 * * * docker exec ecommerce-ai-service python scripts/embed_products.py
 ```
 
-Write-through on individual product create/update is handled by `product-service` (Week 24).
+Write-through on individual product create/update is handled by `product-service` (`ProductEmbeddingService.scheduleEmbedding()`, fires `@Async` on every create/update).

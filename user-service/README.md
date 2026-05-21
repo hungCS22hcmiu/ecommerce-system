@@ -49,6 +49,8 @@ user-service/
 | POST | `/login` | No | Authenticate and receive JWT tokens |
 | POST | `/refresh` | No | Exchange refresh token for new access token |
 | POST | `/logout` | Yes | Blacklist access token, revoke refresh tokens |
+| GET | `/verify-email` | No | Verify email address via token from registration email |
+| POST | `/resend-verification` | No | Re-send the verification email |
 
 ### User Management — `/api/v1/users`
 
@@ -68,15 +70,17 @@ user-service/
 ```
 POST /login
   → 1. Redis pre-check (login_attempts:{email} ≥ 5 → reject immediately)
-  → 2. SELECT ... FOR UPDATE on user row (pessimistic lock)
-       · Verify password (bcrypt)
-       · Increment or reset failed_login_attempts (TX always commits)
+  → 2. SELECT user by email, submit password to bcrypt worker pool
+       · Worker pool: runtime.NumCPU() goroutines; pool full → 503 + Retry-After: 1
+       · Increment or reset login_attempts:{email} in Redis (TX always commits)
   → 3. On success:
        · RS256 JWT access token (15 min TTL, includes jti)
        · 128-char hex refresh token (stored as SHA-256 hash in auth_tokens)
        · Cache session in Redis (session:{userID}, 30 min)
        · Clear login_attempts:{email}
 ```
+
+Login-attempt tracking is Redis-only — no `SELECT ... FOR UPDATE` row lock on login.
 
 **Access token:** RS256 JWT, 15 min TTL, contains `jti` for blacklisting.
 **Refresh token:** 128-char random hex, stored as SHA-256 hash in `auth_tokens`.
@@ -122,6 +126,7 @@ Connection pool: 25 max open, 5 idle, 5 min max lifetime. Schema auto-migrated b
 | `SMTP_PORT` | — | |
 | `SMTP_USERNAME` | — | |
 | `SMTP_PASSWORD` | — | |
+| `BCRYPT_COST` | `12` | bcrypt work factor (docker-compose uses `10` for faster dev startup) |
 | `ENV` | `development` | `development` or `production` |
 
 ## Running
@@ -151,7 +156,7 @@ go test -tags=integration -v -race ./internal/integration/
 ```
 
 Notable integration tests:
-- `TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass` — 10 goroutines at `attempts=4`; proves `SELECT FOR UPDATE` serializes the lockout write, no goroutine bypasses the 5-attempt gate
+- `TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass` — 10 goroutines at `attempts=4`; proves Redis-based attempt counter serializes correctly, no goroutine bypasses the 5-attempt gate
 - `TestAttemptCounter`, `TestJWTMiddleware_*` — Redis-backed attempt counter and token validation
 
 ## Tech Stack

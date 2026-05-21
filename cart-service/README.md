@@ -88,6 +88,8 @@ PUT /api/v1/cart/items/1
 | HTTP | Code | Meaning |
 |---|---|---|
 | 404 | `NOT_FOUND` | Product doesn't exist or is not ACTIVE |
+| 403 | `SELLER_CANNOT_BUY_OWN_PRODUCT` | Seller attempted to add their own product to cart |
+| 409 | `INSUFFICIENT_STOCK` | Not enough available stock for the requested quantity |
 | 409 | `CONCURRENT_UPDATE` | Redis WATCH conflict — client should retry |
 | 503 | `SERVICE_UNAVAILABLE` | product-service circuit is open |
 
@@ -186,4 +188,4 @@ cart_items (
 
 `cart_status` enum: `ACTIVE`, `CHECKED_OUT`, `ABANDONED`
 
-The Postgres schema is append-only from cart-service's perspective. The order-service consumes `GetCartWithItems` / `MarkCheckedOut` when processing an order.
+The Postgres schema is append-only from cart-service's perspective. Cart items for checkout are passed directly from the frontend via router state; no cross-service Postgres access occurs at checkout time.
