@@ -34,6 +34,8 @@ export function ProductDetailPage() {
   const reviews = reviewsData?.data ?? []
   const reviewMeta = reviewsData?.meta
 
+  useEffect(() => { window.scrollTo(0, 0) }, [id])
+
   const related = useProductListInfinite({ categoryId: product?.categoryId, limit: 8 })
   const relatedProducts = (related.data?.pages ?? [])
     .flatMap((p) => p.data ?? [])
