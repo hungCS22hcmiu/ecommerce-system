@@ -79,10 +79,11 @@ def main():
                 ("[" + ",".join(f"{v:.8f}" for v in vec) + "]", pid)
                 for pid, vec in zip(ids, embeddings)
             ]
-            conn.executemany(
-                "UPDATE products SET embedding = %s::vector WHERE id = %s",
-                pairs,
-            )
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "UPDATE products SET embedding = %s::vector WHERE id = %s",
+                    pairs,
+                )
             conn.commit()
             updated += len(batch)
 

@@ -111,13 +111,14 @@ State transitions use `SELECT ... FOR UPDATE` to prevent concurrent updates from
 
 order-service is both a **producer** and a **consumer**.
 
-**Produces** (on order creation):
+**Produces** (via transactional outbox):
 - Topic: `orders.created`
 - Payload: `{ orderId, userId, totalAmount, items[], idempotencyKey }`
+- `createOrder()` writes an `OutboxEvent` row **atomically** with the order in the same transaction. `OutboxPublisher` polls every 100ms with `FOR UPDATE SKIP LOCKED`, publishes to Kafka, then marks `published_at`. A reaper job (`@Scheduled(fixedDelay=60_000)`) re-queues PENDING orders older than 2 minutes that have no unpublished outbox row.
 
 **Consumes**:
 - `payments.completed` → transitions order to `CONFIRMED`, notifies buyer
-- `payments.failed` → transitions order to `PAYMENT_FAILED`, releases stock reservation, notifies buyer
+- `payments.failed` → transitions order to `PAYMENT_FAILED`, releases stock reservation (async, `@Retryable` 3×), notifies buyer
 
 ---
 
@@ -163,6 +164,12 @@ notifications
   ├─ order_id (UUID, nullable), product_id (BIGINT, nullable)
   ├─ type, title, body, is_read BOOLEAN, status
   └─ created_at TIMESTAMPTZ
+
+orders_outbox  (transactional outbox — append-only)
+  ├─ id (UUID), aggregate_id (UUID — orderId), event_type VARCHAR
+  ├─ payload JSONB, headers JSONB (correlation-id stored here)
+  ├─ created_at TIMESTAMPTZ, published_at TIMESTAMPTZ (NULL until sent)
+  └─ PARTIAL INDEX on (created_at) WHERE published_at IS NULL
 ```
 
 **Why VARCHAR(50) for status?** PostgreSQL custom enum types (`order_status`) require explicit casts when Hibernate 6 sends parameters as JDBC typed objects. Converting to VARCHAR eliminates `operator does not exist: order_status = character varying` errors on filtered queries — see V6 migration.
@@ -179,6 +186,7 @@ notifications
 | V4 | `add_product_id_to_notifications.sql` | `product_id BIGINT` nullable column on notifications |
 | V5 | `add_order_status_varchar_cast.sql` | Implicit cast attempt (kept for migration continuity) |
 | V6 | `convert_order_status_to_varchar.sql` | Converts status columns to VARCHAR(50) |
+| V7 | `add_orders_outbox.sql` | `orders_outbox` table + partial index on unpublished rows (`published_at IS NULL`) |
 
 ---
 
@@ -217,6 +225,7 @@ src/main/java/com/ecommerce/order_service/
 │   └── impl/OrderServiceImpl.java            # state machine, pessimistic locking
 ├── kafka/
 │   ├── OrderEventPublisher.java              # produces orders.created
+│   ├── OutboxPublisher.java                  # polls orders_outbox (FOR UPDATE SKIP LOCKED), publishes, marks published_at
 │   └── PaymentEventConsumer.java             # consumes payments.completed/failed
 ├── model/
 │   ├── Order.java                            # JPA entity (status: VARCHAR via @Enumerated STRING)

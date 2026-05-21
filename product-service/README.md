@@ -5,7 +5,7 @@ Java 21 / Spring Boot 3.5 microservice for product catalog, inventory management
 - **Port:** 8081
 - **Database:** PostgreSQL (`ecommerce_products`)
 - **Cache:** Redis (cache-aside, TTL-based)
-- **Concurrency:** Optimistic locking (`@Version`) + `@Retryable`
+- **Concurrency:** Conditional native UPDATE for stock (atomic, no retry) + Redis cache-aside
 
 ---
 
@@ -26,7 +26,7 @@ docker compose up -d product-service
 
 Health check: `GET http://localhost:8081/health/live` → `{ "status": "UP" }`
 
-The database schema and seed data (200 products, 19 categories) are applied automatically by Flyway on first start.
+The database schema is applied automatically by Flyway on first start. Run `python3 script/seed_products.py` from the repo root to populate 10,000 products across 10 sellers and 52 categories (replaces the Flyway V2 sample seed).
 
 ---
 
@@ -133,24 +133,27 @@ products.embedding  vector(384)   ← pgvector, IVFFLAT index (cosine, lists=100
 
 ## Concurrency — Inventory
 
-### Optimistic locking + retry
+### Conditional native UPDATE
 
+Stock mutations use a single atomic SQL statement rather than read-modify-write:
+
+```sql
+-- Reserve: only decrements if enough stock is available
+UPDATE products
+SET stock_reserved = stock_reserved + :qty
+WHERE id = :id AND (stock_quantity - stock_reserved) >= :qty
+
+-- Release: always safe (cannot go negative)
+UPDATE products
+SET stock_reserved = stock_reserved - :qty
+WHERE id = :id AND stock_reserved >= :qty
 ```
-Thread A reads  product: version=0, reserved=0, available=10
-Thread B reads  product: version=0, reserved=0, available=10
 
-Thread A writes: reserved=5, version → 1  ✓
-Thread B writes: version=0 but DB has v1  → ObjectOptimisticLockingFailureException
+- Returns 0 rows updated → diagnoses out-of-stock vs. not-found via `findById` → appropriate exception
+- No `@Version`, no `@Retryable`, no optimistic-lock retry loop
+- Proven by `InventoryConcurrencyTest`: 10 threads competing for 5 units — exactly 5 succeed, 5 get `InsufficientStockException`, no lost updates
 
-@Retryable: Thread B waits 100ms, re-reads (version=1, reserved=5, available=5), retries → success
-```
-
-- `@Version Long version` on `Product` — Hibernate increments on every write
-- `@Retryable(retryFor = ObjectOptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 100))`
-- After 3 failed retries → 409 CONCURRENT_MODIFICATION
-- Proven by `InventoryConcurrencyTest`: 10 threads competing for 5 units — exactly 5 succeed, no lost updates
-
-**Why optimistic (not pessimistic)?** Product reads far outnumber writes. `SELECT FOR UPDATE` blocks every reader during a stock change. Optimistic locking adds zero overhead on reads.
+**Why conditional UPDATE (not SELECT FOR UPDATE)?** A `SELECT FOR UPDATE` would serialize all concurrent reads during a stock change. The conditional UPDATE is a single round-trip that is atomic at the DB level and adds zero overhead on read-only paths.
 
 ---
 
@@ -187,8 +190,8 @@ Thread B writes: version=0 but DB has v1  → ObjectOptimisticLockingFailureExce
 | Version | File | What it does |
 |---|---|---|
 | V1 | `baseline_schema.sql` | All core tables + indexes |
-| V2 | `seed_products.sql` | 19 categories, 200 products, images |
-| V3 | `add_product_embeddings.sql` | `embedding vector(384)` + IVFFLAT index |
+| V2 | `seed_products.sql` | Sample 19 categories, 200 products (replaced at runtime by `script/seed_products.py`) |
+| V3 | `add_product_embeddings.sql` | `embedding vector(384)` + IVFFLAT index (lists=100, cosine ops) |
 | V4 | `add_reviews_and_ratings.sql` | `reviews` table + `avg_rating`/`rating_count` on products |
 
 ---

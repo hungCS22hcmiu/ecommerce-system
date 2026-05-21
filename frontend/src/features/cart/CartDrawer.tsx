@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQueries } from '@tanstack/react-query'
 import { useCart, useCartMutations } from './useCart'
 import { CartItem } from './CartItem'
@@ -12,10 +13,13 @@ interface CartDrawerProps {
 }
 
 export function CartDrawer({ open, onClose }: CartDrawerProps) {
+  const navigate = useNavigate()
   const { data, isLoading } = useCart()
   const { clearCart } = useCartMutations()
   const cart = data?.data
   const items = [...(cart?.items ?? [])].sort((a, b) => a.product_id - b.product_id)
+
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   const productQueries = useQueries({
     queries: items.map((item) => ({
@@ -26,9 +30,34 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
   })
 
   const stockMap: Record<number, number> = {}
+  const sellerByProductId: Record<number, string> = {}
   productQueries.forEach((q, i) => {
-    if (q.data?.data) stockMap[items[i].product_id] = q.data.data.stockAvailable
+    if (q.data?.data) {
+      stockMap[items[i].product_id] = q.data.data.stockAvailable
+      sellerByProductId[items[i].product_id] = q.data.data.sellerId
+    }
   })
+
+  function toggleItem(productId: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(productId) ? next.delete(productId) : next.add(productId)
+      return next
+    })
+  }
+
+  const selectedItems = items.filter((i) => selectedIds.has(i.product_id))
+  const uniqueSellerIds = [
+    ...new Set(selectedItems.map((i) => sellerByProductId[i.product_id]).filter(Boolean)),
+  ]
+  const isMultiSeller = uniqueSellerIds.length > 1
+  const canCheckout = selectedIds.size > 0 && !isMultiSeller
+
+  function handleCheckout() {
+    if (!canCheckout) return
+    onClose()
+    navigate('/checkout', { state: { items: selectedItems } })
+  }
 
   return (
     <>
@@ -73,7 +102,18 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
           ) : (
             <div className="divide-y divide-surface-border">
               {items.map((item) => (
-                <CartItem key={item.product_id} item={item} stockAvailable={stockMap[item.product_id]} />
+                <div key={item.product_id} className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-4 flex-shrink-0 accent-amber-500 cursor-pointer"
+                    checked={selectedIds.has(item.product_id)}
+                    onChange={() => toggleItem(item.product_id)}
+                    aria-label={`Select ${item.product_name}`}
+                  />
+                  <div className="flex-1">
+                    <CartItem item={item} stockAvailable={stockMap[item.product_id]} />
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -89,9 +129,21 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
               </span>
             </div>
 
-            <Link to="/checkout" onClick={onClose} className="block">
-              <Button className="w-full">Proceed to Checkout →</Button>
-            </Link>
+            {isMultiSeller && (
+              <p className="text-xs text-status-failed text-center">
+                Select items from one seller only to checkout together.
+              </p>
+            )}
+
+            <Button
+              className="w-full"
+              disabled={!canCheckout}
+              onClick={handleCheckout}
+            >
+              {selectedIds.size === 0
+                ? 'Select items to checkout'
+                : `Checkout ${selectedIds.size} item${selectedIds.size !== 1 ? 's' : ''} →`}
+            </Button>
 
             <Link to="/cart" onClick={onClose} className="block">
               <Button variant="outline" className="w-full">View Cart</Button>

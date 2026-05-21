@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useProduct } from '@/features/products/useProducts'
+import { useProduct, useProductListInfinite } from '@/features/products/useProducts'
 import { useSellerProfile } from '@/features/sellers/useSellerProfile'
 import { useCartMutations } from '@/features/cart/useCart'
 import { useProductReviews } from '@/features/reviews/useReviews'
+import { ProductCard, ProductCardSkeleton } from '@/features/products/ProductCard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -33,6 +34,29 @@ export function ProductDetailPage() {
   const reviews = reviewsData?.data ?? []
   const reviewMeta = reviewsData?.meta
 
+  useEffect(() => { window.scrollTo(0, 0) }, [id])
+
+  const related = useProductListInfinite({ categoryId: product?.categoryId, limit: 8 })
+  const relatedProducts = (related.data?.pages ?? [])
+    .flatMap((p) => p.data ?? [])
+    .filter((p) => p.id !== Number(id))
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = related
+
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const handleIntersect = useCallback(
+    ([entry]: IntersectionObserverEntry[]) => {
+      if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) fetchNextPage()
+    },
+    [hasNextPage, isFetchingNextPage, fetchNextPage],
+  )
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(handleIntersect, { rootMargin: '200px' })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [handleIntersect])
+
   function applyQty(raw: string, max: number) {
     const parsed = parseInt(raw, 10)
     const clamped = Number.isNaN(parsed) ? 1 : Math.min(Math.max(1, parsed), max)
@@ -54,10 +78,10 @@ export function ProductDetailPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <Link
-        to="/products"
+        to={product?.categoryId ? `/categories/${product.categoryId}` : '/products'}
         className="text-sm text-fg-subtle hover:text-fg-base mb-6 inline-block transition-colors"
       >
-        ← Back to products
+        ← {product?.categoryName ? `Back to ${product.categoryName}` : 'Back to products'}
       </Link>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mt-2">
@@ -286,6 +310,30 @@ export function ProductDetailPage() {
           </div>
         )}
       </div>
+      {/* More from same category */}
+      {product?.categoryName && relatedProducts.length > 0 && (
+        <div className="mt-12">
+          <h2 className="font-semibold text-fg-base text-lg mb-5">
+            More from{' '}
+            <Link
+              to={`/categories/${product.categoryId}`}
+              className="text-accent hover:text-accent-dim transition-colors"
+            >
+              {product.categoryName}
+            </Link>
+          </h2>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {relatedProducts.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+            {isFetchingNextPage &&
+              Array.from({ length: 4 }).map((_, i) => <ProductCardSkeleton key={`sk-${i}`} />)}
+          </div>
+
+          <div ref={sentinelRef} className="h-1" />
+        </div>
+      )}
     </div>
   )
 }
