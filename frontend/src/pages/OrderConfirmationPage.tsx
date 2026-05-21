@@ -10,7 +10,7 @@ export function OrderConfirmationPage() {
   const navigate = useNavigate()
   const { data: orderData } = useOrder(id ?? '')
   const { data: paymentData, isError: paymentError } = usePaymentStatus(id ?? '')
-  const { clearCart } = useCartMutations()
+  const { removeItem } = useCartMutations()
   const [timedOut, setTimedOut] = useState(false)
 
   const order = orderData?.data
@@ -21,8 +21,8 @@ export function OrderConfirmationPage() {
   const isStuck = (timedOut || paymentError) && !isTerminal
 
   useEffect(() => {
-    if (status !== 'COMPLETED') return
-    clearCart.mutate()
+    if (status !== 'COMPLETED' || !order) return
+    order.items.forEach((item) => removeItem.mutate(item.productId))
   }, [status])
 
   useEffect(() => {

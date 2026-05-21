@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { cartApi } from './cartApi'
 import { useCartStore } from '@/store/cartStore'
+import { showToast } from '@/lib/toast'
 import type { ApiResponse } from '@/types/api'
 import type { Cart, AddCartItemRequest } from '@/types/cart'
 
@@ -31,6 +32,19 @@ export function useCartMutations() {
     onError: (_err, _vars, ctx) => {
       if (ctx?.snapshot) queryClient.setQueryData(['cart'], ctx.snapshot)
       useCartStore.getState().decrement()
+      const errData = (_err as { response?: { data?: { error?: { code?: string; message?: string } } } })
+        ?.response?.data?.error
+      if (errData?.code === 'SELLER_CANNOT_BUY_OWN_PRODUCT') {
+        showToast('You cannot purchase your own products.', 'error')
+      } else if (errData?.code === 'INSUFFICIENT_STOCK') {
+        showToast(errData.message ?? 'Insufficient stock available.', 'error')
+      } else if (errData?.code === 'NOT_FOUND') {
+        showToast('This product is no longer available.', 'error')
+      } else if (errData?.code === 'SERVICE_UNAVAILABLE') {
+        showToast('Unable to validate product right now. Please try again.', 'error')
+      } else {
+        showToast('Failed to add item to cart. Please try again.', 'error')
+      }
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['cart'] }),
   })

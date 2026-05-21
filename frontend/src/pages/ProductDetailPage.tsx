@@ -54,10 +54,10 @@ export function ProductDetailPage() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <Link
-        to="/products"
+        to={product?.categoryId ? `/categories/${product.categoryId}` : '/products'}
         className="text-sm text-fg-subtle hover:text-fg-base mb-6 inline-block transition-colors"
       >
-        ← Back to products
+        ← {product?.categoryName ? `Back to ${product.categoryName}` : 'Back to products'}
       </Link>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mt-2">
