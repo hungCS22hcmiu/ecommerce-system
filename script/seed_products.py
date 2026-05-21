@@ -1,117 +1,230 @@
 #!/usr/bin/env python3
 """
-Seed 15 sellers + ~100,000 diverse products into the ecommerce system.
+Wipe all existing product/seller/cart/order/payment data and seed fresh:
+  10 specialist sellers, 10 root categories (41 leaf), 10,000 products, 20,000 images.
 
 Usage:
-  python3 script/seed_products.py
-  python3 script/seed_products.py --target 10000
-  python3 script/seed_products.py --skip-sellers --skip-images
-  python3 script/seed_products.py --dry-run
+  python3 script/seed_products.py                   # full clean + reseed
+  python3 script/seed_products.py --target 5000     # fewer products
+  python3 script/seed_products.py --skip-clean      # skip cleanup (additive)
+  python3 script/seed_products.py --dry-run         # print only, no writes
 
 Prerequisites:
   pip install "psycopg[binary]" bcrypt
 
 Env vars (defaults match docker-compose localhost exposure):
-  USERS_DB_HOST, USERS_DB_PORT, USERS_DB_NAME, USERS_DB_USER, USERS_DB_PASSWORD
-  PRODUCTS_DB_HOST, PRODUCTS_DB_PORT, PRODUCTS_DB_NAME, PRODUCTS_DB_USER, PRODUCTS_DB_PASSWORD
+  USERS_DB_HOST/PORT/NAME/USER/PASSWORD
+  PRODUCTS_DB_HOST/PORT/NAME/USER/PASSWORD
+  CARTS_DB_HOST/PORT/NAME/USER/PASSWORD
+  ORDERS_DB_HOST/PORT/NAME/USER/PASSWORD
+  PAYMENTS_DB_HOST/PORT/NAME/USER/PASSWORD
 """
 import argparse
 import itertools
 import os
+import re
 import random
 import time
-from decimal import Decimal
 
 import bcrypt
 import psycopg
 
-# ── DB connections ─────────────────────────────────────────────────────────────
 
-USERS_DSN = (
-    f"host={os.getenv('USERS_DB_HOST', 'localhost')} "
-    f"port={os.getenv('USERS_DB_PORT', '5432')} "
-    f"dbname={os.getenv('USERS_DB_NAME', 'ecommerce_users')} "
-    f"user={os.getenv('USERS_DB_USER', 'postgres')} "
-    f"password={os.getenv('USERS_DB_PASSWORD', 'postgres')}"
-)
-PRODUCTS_DSN = (
-    f"host={os.getenv('PRODUCTS_DB_HOST', 'localhost')} "
-    f"port={os.getenv('PRODUCTS_DB_PORT', '5432')} "
-    f"dbname={os.getenv('PRODUCTS_DB_NAME', 'ecommerce_products')} "
-    f"user={os.getenv('PRODUCTS_DB_USER', 'postgres')} "
-    f"password={os.getenv('PRODUCTS_DB_PASSWORD', 'postgres')}"
-)
+# ── DB connection strings ──────────────────────────────────────────────────────
+
+def _dsn(prefix: str, dbname: str) -> str:
+    return (
+        f"host={os.getenv(f'{prefix}_DB_HOST', 'localhost')} "
+        f"port={os.getenv(f'{prefix}_DB_PORT', '5432')} "
+        f"dbname={os.getenv(f'{prefix}_DB_NAME', dbname)} "
+        f"user={os.getenv(f'{prefix}_DB_USER', 'postgres')} "
+        f"password={os.getenv(f'{prefix}_DB_PASSWORD', 'postgres')}"
+    )
+
+
+USERS_DSN    = _dsn("USERS",    "ecommerce_users")
+PRODUCTS_DSN = _dsn("PRODUCTS", "ecommerce_products")
+CARTS_DSN    = _dsn("CARTS",    "ecommerce_carts")
+ORDERS_DSN   = _dsn("ORDERS",   "ecommerce_orders")
+PAYMENTS_DSN = _dsn("PAYMENTS", "ecommerce_payments")
 
 SELLER_PASSWORD = "Password123!"
 
-# ── Sellers (15 total — first 3 match V2 seed placeholders) ───────────────────
+# These 3 sample-user IDs are NEVER deleted by cleanup.
+PROTECTED_USER_IDS = (
+    "00000000-0000-0000-0000-000000000001",  # admin@example.com
+    "00000000-0000-0000-0000-000000000002",  # customer@example.com
+    "00000000-0000-0000-0000-000000000003",  # seller@example.com
+)
+
+# ── Sellers ────────────────────────────────────────────────────────────────────
+# 10 sellers, each exclusively owns one root category.
+# First 3 UUIDs match V2 Flyway seed placeholders (safe since cleanup wipes those products).
 
 SELLERS = [
-    {"id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller01@techstore.com",   "first_name": "Alex",    "last_name": "Chen"},
-    {"id": "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller02@fashionhub.com",  "first_name": "Maria",   "last_name": "Santos"},
-    {"id": "c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller03@homegoods.com",   "first_name": "James",   "last_name": "Wilson"},
-    {"id": "d0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller04@sportzone.com",   "first_name": "Priya",   "last_name": "Patel"},
-    {"id": "e0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller05@beautyco.com",    "first_name": "Sophie",  "last_name": "Martin"},
-    {"id": "f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller06@bookworld.com",   "first_name": "David",   "last_name": "Kim"},
-    {"id": "a1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller07@autoparts.com",   "first_name": "Carlos",  "last_name": "Gomez"},
-    {"id": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller08@petshop.com",     "first_name": "Emma",    "last_name": "Johnson"},
-    {"id": "c1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller09@gamevault.com",   "first_name": "Liam",    "last_name": "Brown"},
-    {"id": "d1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller10@jewelplus.com",   "first_name": "Aisha",   "last_name": "Okafor"},
-    {"id": "e1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller11@musicmart.com",   "first_name": "Noah",    "last_name": "Taylor"},
-    {"id": "f1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller12@officesupply.com","first_name": "Yuki",    "last_name": "Tanaka"},
-    {"id": "a2eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller13@babyworld.com",   "first_name": "Fatima",  "last_name": "Hassan"},
-    {"id": "b2eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller14@travelpro.com",   "first_name": "Oliver",  "last_name": "Smith"},
-    {"id": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller15@healthplus.com",  "first_name": "Isabella","last_name": "Rossi"},
+    {"id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller01@techhub.com",        "first_name": "Alex",    "last_name": "Chen",    "store": "TechHub"},
+    {"id": "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller02@fashionforward.com", "first_name": "Maria",   "last_name": "Santos",  "store": "FashionForward"},
+    {"id": "c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller03@homeessentials.com", "first_name": "James",   "last_name": "Wilson",  "store": "HomeEssentials"},
+    {"id": "d0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller04@bookverse.com",      "first_name": "Priya",   "last_name": "Patel",   "store": "BookVerse"},
+    {"id": "e0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller05@sportspeak.com",     "first_name": "Sophie",  "last_name": "Martin",  "store": "SportsPeak"},
+    {"id": "f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller06@beautybox.com",      "first_name": "David",   "last_name": "Kim",     "store": "BeautyBox"},
+    {"id": "a1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller07@babybliss.com",      "first_name": "Carlos",  "last_name": "Gomez",   "store": "BabyBliss"},
+    {"id": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller08@petparadise.com",    "first_name": "Emma",    "last_name": "Johnson", "store": "PetParadise"},
+    {"id": "c1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller09@foodcraft.com",      "first_name": "Liam",    "last_name": "Brown",   "store": "FoodCraft"},
+    {"id": "d1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "email": "seller10@musiczone.com",      "first_name": "Aisha",   "last_name": "Okafor",  "store": "MusicZone"},
 ]
 
 # ── Category taxonomy ──────────────────────────────────────────────────────────
-# Each leaf has: name, slug, price_range (min, max), nouns, adjectives, brands
+# Each root entry has a "seller_email" that maps to the exclusive seller for that root.
+# Each leaf has: name, slug, price (min, max), nouns, adjs, brands.
 
 TAXONOMY = [
-    # ── Automotive ────────────────────────────────────────────────────────────
+    # ── Electronics ──────────────────────────────────────────────────────────
     {
-        "root": "Automotive", "root_slug": "automotive",
+        "root": "Electronics", "root_slug": "electronics",
+        "seller_email": "seller01@techhub.com",
         "leaves": [
-            {"name": "Car Care", "slug": "car-care", "price": (5.99, 89.99),
-             "nouns": ["Wax", "Polish", "Shampoo", "Cleaner", "Detailer", "Coating"],
-             "adjs": ["Premium", "Ultra-Shine", "Heavy-Duty", "Ceramic", "Waterless"],
-             "brands": ["AutoShine", "MeguiarsPro", "ChemX", "DetailKing", "ClearCoat"]},
-            {"name": "Car Electronics", "slug": "car-electronics", "price": (19.99, 349.99),
-             "nouns": ["Dash Cam", "GPS Navigator", "Backup Camera", "Car Charger", "FM Transmitter"],
-             "adjs": ["4K", "Wireless", "HD", "Dual-Channel", "Smart"],
-             "brands": ["DriveView", "NavPro", "VisionX", "AutoConnect", "SmartDrive"]},
-            {"name": "Interior Accessories", "slug": "car-interior", "price": (9.99, 129.99),
-             "nouns": ["Seat Cover", "Floor Mat", "Steering Wheel Cover", "Car Organizer", "Sunshade"],
-             "adjs": ["Universal", "Leather", "Custom-Fit", "Premium", "All-Season"],
-             "brands": ["ComfortRide", "LuxAuto", "FitPerfect", "DriveComfort", "AutoStyle"]},
-            {"name": "Exterior Accessories", "slug": "car-exterior", "price": (14.99, 199.99),
-             "nouns": ["Car Cover", "Mud Flap", "Roof Rack", "Tow Hook", "Window Visor"],
-             "adjs": ["Weatherproof", "Heavy-Duty", "Universal", "Aerodynamic", "UV-Resistant"],
-             "brands": ["ShieldAuto", "ExterioPro", "WeatherGuard", "TopMount", "DriveX"]},
+            {"name": "Laptops & Computers", "slug": "laptops-computers", "price": (349.99, 2499.99),
+             "nouns": ["Laptop", "Ultrabook", "Gaming Laptop", "Chromebook", "Mini PC", "All-in-One PC"],
+             "adjs": ["16GB RAM", "512GB SSD", "Backlit Keyboard", "4K Display", "Thin & Light"],
+             "brands": ["TechPro", "SwiftBook", "CoreX", "PixelEdge", "NovaTech"]},
+            {"name": "Smartphones & Tablets", "slug": "smartphones-tablets", "price": (149.99, 1299.99),
+             "nouns": ["Smartphone", "Android Phone", "Tablet", "iPad Alternative", "Flagship Phone", "Phablet"],
+             "adjs": ["5G", "AMOLED", "120Hz", "Triple-Camera", "Fast-Charging"],
+             "brands": ["VeloPhone", "PrismMobile", "StarDevice", "ZephyrTech", "NexGen"]},
+            {"name": "Audio & Headphones", "slug": "audio-headphones", "price": (19.99, 499.99),
+             "nouns": ["Wireless Headphones", "Earbuds", "Speaker", "Soundbar", "DAC Amp", "In-Ear Monitor"],
+             "adjs": ["Noise-Canceling", "Hi-Res", "Bluetooth 5.3", "Studio-Grade", "Waterproof"],
+             "brands": ["SoundWave", "PureAudio", "BassLab", "ClearTone", "EchoMax"]},
+            {"name": "Cameras & Photography", "slug": "cameras-photography", "price": (89.99, 2999.99),
+             "nouns": ["Mirrorless Camera", "DSLR", "Action Camera", "Drone", "Camera Lens", "Tripod"],
+             "adjs": ["4K Video", "Full-Frame", "Waterproof", "Stabilized", "24MP"],
+             "brands": ["LensX", "OpticsPro", "SnapMaster", "VisionCraft", "FocusLab"]},
+            {"name": "Smart Home & IoT", "slug": "smart-home", "price": (14.99, 349.99),
+             "nouns": ["Smart Speaker", "Smart Bulb", "Security Camera", "Smart Plug", "Robot Vacuum", "Smart Lock"],
+             "adjs": ["Voice-Controlled", "Wi-Fi 6", "Energy-Saving", "App-Connected", "AI-Powered"],
+             "brands": ["SmartNest", "HomeIQ", "ConnectX", "AutoHome", "IntelliHome"]},
+        ]
+    },
+    # ── Clothing & Fashion ────────────────────────────────────────────────────
+    {
+        "root": "Clothing & Fashion", "root_slug": "clothing-fashion",
+        "seller_email": "seller02@fashionforward.com",
+        "leaves": [
+            {"name": "Men's Clothing", "slug": "mens-clothing", "price": (19.99, 199.99),
+             "nouns": ["T-Shirt", "Dress Shirt", "Chinos", "Hoodie", "Blazer", "Polo Shirt", "Joggers"],
+             "adjs": ["Slim Fit", "Stretch", "Merino Wool", "Breathable", "Wrinkle-Free"],
+             "brands": ["ModernMen", "UrbanEdge", "ClassicWear", "DapperCo", "StyleX"]},
+            {"name": "Women's Clothing", "slug": "womens-clothing", "price": (19.99, 249.99),
+             "nouns": ["Dress", "Blouse", "Cardigan", "Skirt", "Jumpsuit", "Blazer", "Leggings"],
+             "adjs": ["Floral", "Midi-Length", "Boho", "Structured", "Flowy"],
+             "brands": ["ChicStyle", "FemmeX", "BlossomWear", "VogueX", "ElegantCo"]},
+            {"name": "Footwear", "slug": "footwear", "price": (29.99, 299.99),
+             "nouns": ["Sneakers", "Running Shoes", "Boots", "Loafers", "Sandals", "Dress Shoes", "Slip-Ons"],
+             "adjs": ["Cushioned", "Memory Foam", "Waterproof", "Lightweight", "Anti-Slip"],
+             "brands": ["StepUp", "KickX", "FootFlex", "SoleMate", "TreadPro"]},
+            {"name": "Bags & Accessories", "slug": "bags-accessories", "price": (14.99, 199.99),
+             "nouns": ["Backpack", "Tote Bag", "Crossbody Bag", "Wallet", "Belt", "Scarf", "Sunglasses"],
+             "adjs": ["Vegan Leather", "Canvas", "RFID-Blocking", "Minimalist", "Spacious"],
+             "brands": ["BagCraft", "AccesoX", "CarryStyle", "LuxBag", "PocketPro"]},
+            {"name": "Watches & Jewelry", "slug": "watches-jewelry", "price": (19.99, 499.99),
+             "nouns": ["Watch", "Bracelet", "Necklace", "Ring", "Earrings", "Smartwatch", "Pendant"],
+             "adjs": ["Stainless Steel", "Rose Gold", "Minimalist", "Sapphire Crystal", "Engraved"],
+             "brands": ["TimeCraft", "GemX", "WristPro", "LuxJewel", "ShimmerCo"]},
+        ]
+    },
+    # ── Home & Garden ─────────────────────────────────────────────────────────
+    {
+        "root": "Home & Garden", "root_slug": "home-garden",
+        "seller_email": "seller03@homeessentials.com",
+        "leaves": [
+            {"name": "Kitchen & Dining", "slug": "kitchen-dining", "price": (9.99, 299.99),
+             "nouns": ["Air Fryer", "Coffee Maker", "Knife Set", "Cutting Board", "Mixing Bowl Set", "Instant Pot", "Blender"],
+             "adjs": ["Non-Stick", "Stainless Steel", "Digital", "Dishwasher-Safe", "BPA-Free"],
+             "brands": ["CookPro", "KitchenX", "ChefMate", "CuisineLab", "HomeCook"]},
+            {"name": "Furniture & Living", "slug": "furniture-living", "price": (49.99, 999.99),
+             "nouns": ["Sofa", "Coffee Table", "Bookshelf", "TV Stand", "Accent Chair", "Desk", "Nightstand"],
+             "adjs": ["Mid-Century", "Scandinavian", "Space-Saving", "Solid Wood", "Upholstered"],
+             "brands": ["FurnX", "HomeStyle", "LivingCo", "WoodCraft", "ModernHome"]},
+            {"name": "Bedding & Bath", "slug": "bedding-bath", "price": (14.99, 199.99),
+             "nouns": ["Duvet Cover", "Pillow", "Bed Sheet Set", "Towel Set", "Mattress Topper", "Blanket", "Bath Mat"],
+             "adjs": ["100% Cotton", "Bamboo", "Cooling", "Weighted", "Hotel-Quality"],
+             "brands": ["SleepWell", "BedLux", "ComfortX", "DreamNest", "PureHome"]},
+            {"name": "Garden & Outdoor", "slug": "garden-outdoor", "price": (9.99, 299.99),
+             "nouns": ["Garden Hose", "Planter Pot", "Garden Tools Set", "Lawn Mower", "Bird Feeder", "Outdoor Lights", "Hammock"],
+             "adjs": ["Weather-Resistant", "Stainless Steel", "Solar-Powered", "Collapsible", "Heavy-Duty"],
+             "brands": ["GardenX", "GreenThumb", "OutdoorPro", "BloomCo", "NatureCraft"]},
+        ]
+    },
+    # ── Books & Media ─────────────────────────────────────────────────────────
+    {
+        "root": "Books & Media", "root_slug": "books-media",
+        "seller_email": "seller04@bookverse.com",
+        "leaves": [
+            {"name": "Technology & Programming", "slug": "tech-books", "price": (9.99, 69.99),
+             "nouns": ["Python Book", "JavaScript Guide", "Machine Learning Textbook", "System Design Book", "DevOps Handbook", "Cloud Computing Guide"],
+             "adjs": ["Beginner-Friendly", "Comprehensive", "Updated 2024", "Hands-On", "Best-Selling"],
+             "brands": ["CodePress", "TechBooks", "DevLibrary", "LearnPub", "ProgrammerPress"]},
+            {"name": "Fiction & Literature", "slug": "fiction-literature", "price": (7.99, 29.99),
+             "nouns": ["Novel", "Thriller", "Mystery", "Romance", "Science Fiction", "Fantasy Novel", "Short Stories"],
+             "adjs": ["Award-Winning", "Bestselling", "Page-Turner", "Gripping", "Critically Acclaimed"],
+             "brands": ["StoryPress", "FictionHouse", "NarrativeX", "LitWorld", "ReadMore"]},
+            {"name": "Science & Education", "slug": "science-education", "price": (14.99, 89.99),
+             "nouns": ["Biology Textbook", "Physics Guide", "Chemistry Manual", "Math Workbook", "Astronomy Book", "Neuroscience Book"],
+             "adjs": ["Illustrated", "Revised Edition", "College-Level", "Research-Based", "Peer-Reviewed"],
+             "brands": ["SciencePress", "EduBooks", "AcademicX", "LearnSci", "StudyPro"]},
+            {"name": "History & Biography", "slug": "history-biography", "price": (9.99, 39.99),
+             "nouns": ["Biography", "Autobiography", "History Book", "Memoir", "World War Book", "Ancient History"],
+             "adjs": ["Definitive", "Illustrated", "Pulitzer Prize-Winning", "Landmark", "Revised"],
+             "brands": ["HistoryX", "BioPub", "ChronicleBooks", "PastPress", "LegacyRead"]},
+        ]
+    },
+    # ── Sports & Outdoors ─────────────────────────────────────────────────────
+    {
+        "root": "Sports & Outdoors", "root_slug": "sports-outdoors",
+        "seller_email": "seller05@sportspeak.com",
+        "leaves": [
+            {"name": "Fitness Equipment", "slug": "fitness-equipment", "price": (19.99, 799.99),
+             "nouns": ["Dumbbell Set", "Resistance Bands", "Yoga Mat", "Pull-Up Bar", "Treadmill", "Kettlebell", "Foam Roller"],
+             "adjs": ["Anti-Slip", "Adjustable", "Commercial-Grade", "Compact", "Heavy-Duty"],
+             "brands": ["FitPro", "IronX", "GymCore", "StrengthCo", "ActiveX"]},
+            {"name": "Outdoor & Camping", "slug": "outdoor-camping", "price": (14.99, 499.99),
+             "nouns": ["Tent", "Sleeping Bag", "Hiking Backpack", "Camping Stove", "Headlamp", "Trekking Poles", "Water Filter"],
+             "adjs": ["Lightweight", "Waterproof", "4-Season", "Ultralight", "Wind-Resistant"],
+             "brands": ["TrailBlaze", "CampX", "OutdoorPro", "WildGear", "ExploreX"]},
+            {"name": "Cycling & Accessories", "slug": "cycling", "price": (14.99, 399.99),
+             "nouns": ["Bike Helmet", "Cycling Gloves", "Bike Lock", "Cycling Jersey", "Bike Computer", "Saddle Bag", "Water Bottle Cage"],
+             "adjs": ["Aerodynamic", "Reflective", "Breathable", "Anti-Theft", "Lightweight"],
+             "brands": ["CycleX", "VeloGear", "RidePro", "SpinCo", "BikeMate"]},
+            {"name": "Water Sports", "slug": "water-sports", "price": (19.99, 599.99),
+             "nouns": ["Swim Goggles", "Wetsuit", "Paddle Board", "Snorkel Set", "Life Jacket", "Kayak Paddle", "Dry Bag"],
+             "adjs": ["UV-Protection", "Anti-Fog", "Buoyant", "Flexible", "Quick-Dry"],
+             "brands": ["AquaX", "WaveRider", "SplashPro", "OceanGear", "HydroSport"]},
         ]
     },
     # ── Beauty & Personal Care ────────────────────────────────────────────────
     {
-        "root": "Beauty & Personal Care", "root_slug": "beauty",
+        "root": "Beauty & Personal Care", "root_slug": "beauty-care",
+        "seller_email": "seller06@beautybox.com",
         "leaves": [
             {"name": "Skincare", "slug": "skincare", "price": (8.99, 129.99),
-             "nouns": ["Serum", "Moisturizer", "Toner", "Face Wash", "Eye Cream", "SPF Sunscreen"],
-             "adjs": ["Vitamin C", "Retinol", "Hyaluronic", "Niacinamide", "Anti-Aging"],
+             "nouns": ["Serum", "Moisturizer", "Face Wash", "Toner", "Eye Cream", "SPF Sunscreen", "Face Mask"],
+             "adjs": ["Vitamin C", "Retinol", "Hyaluronic Acid", "Niacinamide", "Anti-Aging"],
              "brands": ["GlowLab", "PureSkin", "DermaFix", "LumiGlow", "ClearPore"]},
             {"name": "Haircare", "slug": "haircare", "price": (7.99, 79.99),
-             "nouns": ["Shampoo", "Conditioner", "Hair Mask", "Hair Oil", "Leave-In Spray", "Dry Shampoo"],
-             "adjs": ["Argan Oil", "Keratin", "Color-Safe", "Volumizing", "Repair"],
+             "nouns": ["Shampoo", "Conditioner", "Hair Mask", "Hair Oil", "Dry Shampoo", "Leave-In Spray"],
+             "adjs": ["Argan Oil", "Keratin", "Color-Safe", "Volumizing", "Repair Formula"],
              "brands": ["SilkMane", "HydraHair", "ReviveX", "GlossyLocks", "HairLab"]},
-            {"name": "Makeup", "slug": "makeup", "price": (6.99, 89.99),
-             "nouns": ["Foundation", "Mascara", "Lipstick", "Eyeshadow Palette", "Blush", "Highlighter"],
-             "adjs": ["Long-Lasting", "Matte", "Dewy", "Full-Coverage", "Buildable"],
+            {"name": "Makeup & Cosmetics", "slug": "makeup-cosmetics", "price": (6.99, 89.99),
+             "nouns": ["Foundation", "Mascara", "Lipstick", "Eyeshadow Palette", "Blush", "Highlighter", "Concealer"],
+             "adjs": ["Long-Lasting", "Matte", "Full-Coverage", "Buildable", "Vegan"],
              "brands": ["GlamourX", "FaceForward", "ColorStudio", "BeautyPop", "PigmentPro"]},
             {"name": "Fragrances", "slug": "fragrances", "price": (19.99, 249.99),
-             "nouns": ["Eau de Parfum", "Cologne", "Body Mist", "Perfume Oil", "Deodorant"],
+             "nouns": ["Eau de Parfum", "Cologne", "Body Mist", "Perfume Oil", "Gift Set"],
              "adjs": ["Floral", "Woody", "Fresh", "Oriental", "Citrus"],
              "brands": ["ScentLux", "AromaElite", "FragranceHouse", "NotesByCo", "EssenceX"]},
             {"name": "Men's Grooming", "slug": "mens-grooming", "price": (9.99, 69.99),
-             "nouns": ["Beard Oil", "Shaving Cream", "Aftershave", "Face Scrub", "Beard Balm"],
+             "nouns": ["Beard Oil", "Shaving Cream", "Aftershave", "Face Scrub", "Beard Balm", "Electric Razor"],
              "adjs": ["Sandalwood", "Charcoal", "Cooling", "Hydrating", "Sensitive-Skin"],
              "brands": ["GroomCo", "ManEdge", "BarbershopX", "BladeKing", "FaceForce"]},
         ]
@@ -119,233 +232,160 @@ TAXONOMY = [
     # ── Baby & Kids ───────────────────────────────────────────────────────────
     {
         "root": "Baby & Kids", "root_slug": "baby-kids",
+        "seller_email": "seller07@babybliss.com",
         "leaves": [
-            {"name": "Baby Gear", "slug": "baby-gear", "price": (19.99, 499.99),
-             "nouns": ["Stroller", "Baby Monitor", "Car Seat", "Baby Carrier", "Bouncer"],
+            {"name": "Baby Gear & Safety", "slug": "baby-gear", "price": (19.99, 499.99),
+             "nouns": ["Stroller", "Baby Monitor", "Car Seat", "Baby Carrier", "Bouncer Seat", "Baby Gate"],
              "adjs": ["Lightweight", "Foldable", "Smart", "Safety-Certified", "All-Terrain"],
              "brands": ["TinyStep", "BabyGuard", "SafeRide", "MiniMove", "PureStart"]},
-            {"name": "Toys & Games", "slug": "kids-toys", "price": (9.99, 149.99),
-             "nouns": ["Building Blocks", "Puzzle", "Action Figure", "Board Game", "Remote Car", "Doll"],
-             "adjs": ["Interactive", "Educational", "Creative", "STEM", "Colorful"],
+            {"name": "Toys & Games", "slug": "toys-games", "price": (9.99, 149.99),
+             "nouns": ["Building Blocks", "Puzzle", "Action Figure", "Board Game", "Remote Car", "Doll", "Plush Toy"],
+             "adjs": ["Interactive", "Educational", "Non-Toxic", "Colorful", "Durable"],
              "brands": ["PlayWorld", "KidsBright", "FunZone", "ToyLab", "CreatiKids"]},
             {"name": "Educational Toys", "slug": "educational-toys", "price": (14.99, 99.99),
-             "nouns": ["Math Kit", "Science Set", "Coding Robot", "Flash Cards", "Globe", "Telescope"],
+             "nouns": ["Math Kit", "Science Set", "Coding Robot", "Flash Cards", "Globe", "Telescope", "Microscope"],
              "adjs": ["STEM", "Montessori", "Award-Winning", "Screen-Free", "Hands-On"],
              "brands": ["BrainBoost", "LearnPlay", "SmartKid", "EduFun", "MindBuilder"]},
-            {"name": "Kids Clothing", "slug": "kids-clothing", "price": (9.99, 59.99),
-             "nouns": ["T-Shirt", "Pajamas", "Hoodie", "Dress", "Jacket", "Shorts"],
-             "adjs": ["100% Cotton", "Soft", "Machine-Washable", "Colorful", "Breathable"],
-             "brands": ["TinyThreads", "KidsWear", "LittleStyle", "MiniFashion", "CozyKids"]},
-        ]
-    },
-    # ── Food & Grocery ────────────────────────────────────────────────────────
-    {
-        "root": "Food & Grocery", "root_slug": "food-grocery",
-        "leaves": [
-            {"name": "Snacks & Chips", "slug": "snacks", "price": (1.99, 24.99),
-             "nouns": ["Chips", "Popcorn", "Nuts Mix", "Crackers", "Granola Bar", "Trail Mix"],
-             "adjs": ["Sea Salt", "Spicy", "Organic", "Gluten-Free", "Low-Calorie"],
-             "brands": ["CrunchCo", "SnackBurst", "NatureBites", "CrispyPop", "GoodMunch"]},
-            {"name": "Coffee & Tea", "slug": "coffee-tea", "price": (7.99, 59.99),
-             "nouns": ["Ground Coffee", "Whole Bean", "Green Tea", "Herbal Tea", "Cold Brew", "Espresso"],
-             "adjs": ["Single-Origin", "Dark Roast", "Organic", "Fairtrade", "Decaf"],
-             "brands": ["BrewMaster", "LeafOrigin", "CoffeeCraft", "TeaHaven", "PureRoast"]},
-            {"name": "Organic Foods", "slug": "organic-foods", "price": (4.99, 49.99),
-             "nouns": ["Quinoa", "Chia Seeds", "Coconut Oil", "Almond Butter", "Oat Flour", "Honey"],
-             "adjs": ["USDA Organic", "Non-GMO", "Raw", "Cold-Pressed", "Pure"],
-             "brands": ["OrganicRoots", "EarthFirst", "PureHarvest", "GreenField", "NaturePure"]},
-            {"name": "Beverages", "slug": "beverages", "price": (1.49, 39.99),
-             "nouns": ["Sparkling Water", "Protein Shake", "Energy Drink", "Juice", "Kombucha", "Smoothie"],
-             "adjs": ["Sugar-Free", "Zero-Calorie", "Vitamin-Enriched", "Natural", "Carbonated"],
-             "brands": ["HydroBoost", "VitaSip", "RefreshCo", "DrinkWell", "BubbleX"]},
-        ]
-    },
-    # ── Health & Wellness ─────────────────────────────────────────────────────
-    {
-        "root": "Health & Wellness", "root_slug": "health-wellness",
-        "leaves": [
-            {"name": "Vitamins & Supplements", "slug": "vitamins", "price": (9.99, 79.99),
-             "nouns": ["Vitamin C", "Omega-3", "Multivitamin", "Probiotic", "Collagen", "Zinc"],
-             "adjs": ["1000mg", "High-Potency", "Vegan", "Time-Release", "Third-Party Tested"],
-             "brands": ["VitaCore", "HealthPlus", "NutriFit", "PureWell", "SupplementX"]},
-            {"name": "Medical Devices", "slug": "medical-devices", "price": (19.99, 299.99),
-             "nouns": ["Blood Pressure Monitor", "Thermometer", "Pulse Oximeter", "Glucose Meter", "Nebulizer"],
-             "adjs": ["Digital", "Automatic", "Clinical-Grade", "FDA-Cleared", "Wireless"],
-             "brands": ["MediTech", "HealthTrack", "ClinicalX", "VitalScan", "MedDevice"]},
-            {"name": "First Aid", "slug": "first-aid", "price": (4.99, 59.99),
-             "nouns": ["First Aid Kit", "Bandages", "Antiseptic Spray", "Medical Tape", "Ice Pack", "Gauze"],
-             "adjs": ["240-Piece", "Waterproof", "Sterile", "Portable", "Emergency"],
-             "brands": ["SafeGuard", "FirstCare", "MedKit", "HealFast", "AidPro"]},
-            {"name": "Personal Care", "slug": "personal-care-health", "price": (3.99, 49.99),
-             "nouns": ["Electric Toothbrush", "Floss", "Mouthwash", "Nail Clipper Set", "Facial Steamer"],
-             "adjs": ["Sonic", "Whitening", "Travel-Size", "Rechargeable", "Professional"],
-             "brands": ["OralCare Pro", "DentaX", "CleanSmile", "NailPerfect", "SteamFace"]},
-        ]
-    },
-    # ── Jewelry & Watches ─────────────────────────────────────────────────────
-    {
-        "root": "Jewelry & Watches", "root_slug": "jewelry-watches",
-        "leaves": [
-            {"name": "Women's Jewelry", "slug": "womens-jewelry", "price": (14.99, 499.99),
-             "nouns": ["Necklace", "Bracelet", "Earrings", "Ring", "Anklet", "Pendant"],
-             "adjs": ["Sterling Silver", "Rose Gold", "Diamond-Cut", "Minimalist", "Boho"],
-             "brands": ["LuxGems", "ShimmerCo", "GoldAura", "JewelCraft", "SilverMuse"]},
-            {"name": "Watches", "slug": "watches", "price": (49.99, 999.99),
-             "nouns": ["Chronograph", "Smartwatch", "Dive Watch", "Dress Watch", "Sport Watch"],
-             "adjs": ["Automatic", "Quartz", "Waterproof", "Sapphire Crystal", "Swiss-Movement"],
-             "brands": ["TimeCraft", "ChronoX", "WristMaster", "EliteTime", "PrecisionWatch"]},
-            {"name": "Men's Jewelry", "slug": "mens-jewelry", "price": (19.99, 299.99),
-             "nouns": ["Bracelet", "Ring", "Chain Necklace", "Cufflinks", "Dog Tag"],
-             "adjs": ["Stainless Steel", "Titanium", "Matte Black", "Engraved", "Minimalist"],
-             "brands": ["ManMetal", "BoldGear", "SteelCraft", "UrbanJewel", "RawEdge"]},
-        ]
-    },
-    # ── Musical Instruments ───────────────────────────────────────────────────
-    {
-        "root": "Musical Instruments", "root_slug": "musical-instruments",
-        "leaves": [
-            {"name": "Guitars", "slug": "guitars", "price": (79.99, 1499.99),
-             "nouns": ["Acoustic Guitar", "Electric Guitar", "Bass Guitar", "Classical Guitar", "Travel Guitar"],
-             "adjs": ["Solid-Top", "Mahogany", "Rosewood", "Sunburst", "Beginner-Friendly"],
-             "brands": ["StringMaster", "ChordCraft", "MelodyX", "FretBoard", "SoundWave"]},
-            {"name": "Keyboards & Pianos", "slug": "keyboards-pianos", "price": (99.99, 1999.99),
-             "nouns": ["Digital Piano", "MIDI Keyboard", "Synthesizer", "Stage Piano", "Arranger Keyboard"],
-             "adjs": ["88-Key", "Weighted", "Semi-Weighted", "Bluetooth", "Portable"],
-             "brands": ["KeyMaster", "PianoX", "SynthPro", "DigitalKeys", "IvoryTouch"]},
-            {"name": "Drums & Percussion", "slug": "drums-percussion", "price": (49.99, 999.99),
-             "nouns": ["Electronic Drum Kit", "Snare Drum", "Djembe", "Cajon", "Drum Pad", "Bongo Set"],
-             "adjs": ["8-Piece", "Mesh-Head", "Professional", "Practice", "Acoustic"],
-             "brands": ["BeatCraft", "RhythmX", "DrumMaster", "PercussionPro", "StickHit"]},
-            {"name": "Studio Equipment", "slug": "studio-equipment", "price": (29.99, 799.99),
-             "nouns": ["Audio Interface", "Studio Monitor", "Microphone", "Headphones", "MIDI Controller", "Pop Filter"],
-             "adjs": ["XLR", "USB", "Condenser", "Dynamic", "Studio-Grade"],
-             "brands": ["StudioX", "RecordPro", "AudioCraft", "SoundBooth", "MixMaster"]},
-        ]
-    },
-    # ── Office Supplies ───────────────────────────────────────────────────────
-    {
-        "root": "Office Supplies", "root_slug": "office-supplies",
-        "leaves": [
-            {"name": "Stationery", "slug": "stationery", "price": (1.99, 39.99),
-             "nouns": ["Ballpoint Pen", "Notebook", "Highlighter Set", "Sticky Notes", "Marker", "Planner"],
-             "adjs": ["Gel-Ink", "Refillable", "Ruled", "Dotted", "Hardcover"],
-             "brands": ["InkFlow", "PaperCraft", "WriteWell", "NoteX", "PenMaster"]},
-            {"name": "Desk Accessories", "slug": "desk-accessories", "price": (9.99, 149.99),
-             "nouns": ["Desk Organizer", "Monitor Stand", "Lamp", "Mouse Pad", "Cable Manager", "Stapler"],
-             "adjs": ["Bamboo", "Adjustable", "Ergonomic", "LED", "Wireless-Charging"],
-             "brands": ["DeskPro", "WorkSpace", "OfficeX", "OrganizerPlus", "DeskFlow"]},
-            {"name": "Storage & Organization", "slug": "office-storage", "price": (14.99, 199.99),
-             "nouns": ["File Cabinet", "Binder", "Label Maker", "Drawer Organizer", "Document Box", "Shelf"],
-             "adjs": ["Lockable", "Stackable", "Color-Coded", "Heavy-Duty", "Letter-Size"],
-             "brands": ["FileMax", "StorePro", "LabelCo", "OrderX", "ArchivePro"]},
-            {"name": "Printers & Ink", "slug": "printers-ink", "price": (9.99, 299.99),
-             "nouns": ["Ink Cartridge", "Toner Cartridge", "Label Printer", "Inkjet Printer", "Paper Ream"],
-             "adjs": ["Compatible", "OEM", "High-Yield", "Photo-Quality", "Wireless"],
-             "brands": ["PrintPro", "InkSaver", "TonerX", "CartridgePlus", "PrintMaster"]},
         ]
     },
     # ── Pets ──────────────────────────────────────────────────────────────────
     {
         "root": "Pets", "root_slug": "pets",
+        "seller_email": "seller08@petparadise.com",
         "leaves": [
             {"name": "Dog Supplies", "slug": "dog-supplies", "price": (4.99, 199.99),
-             "nouns": ["Dog Food", "Leash", "Harness", "Dog Bed", "Chew Toy", "Dog Crate"],
+             "nouns": ["Dog Food", "Leash", "Harness", "Dog Bed", "Chew Toy", "Dog Crate", "Grooming Brush"],
              "adjs": ["Grain-Free", "Adjustable", "Orthopedic", "Indestructible", "Reflective"],
              "brands": ["PawsFirst", "DogWorld", "TailWag", "WoofCo", "PetPro"]},
             {"name": "Cat Supplies", "slug": "cat-supplies", "price": (4.99, 149.99),
-             "nouns": ["Cat Food", "Cat Litter", "Scratching Post", "Cat Tree", "Litter Box", "Cat Toy"],
+             "nouns": ["Cat Food", "Cat Litter", "Scratching Post", "Cat Tree", "Litter Box", "Cat Toy", "Cat Carrier"],
              "adjs": ["Self-Cleaning", "Odor-Control", "Sisal", "Multi-Level", "Interactive"],
              "brands": ["PurrFect", "MeowCo", "CatLux", "WhiskerX", "FelinePro"]},
-            {"name": "Fish & Aquarium", "slug": "fish-aquarium", "price": (7.99, 299.99),
-             "nouns": ["Aquarium Tank", "Filter", "Heater", "Fish Food", "Gravel", "LED Light"],
-             "adjs": ["20-Gallon", "Freshwater", "Saltwater", "Submersible", "Quiet-Flow"],
-             "brands": ["AquaPro", "FishTank", "WaterWorld", "ClearStream", "AquaLife"]},
             {"name": "Bird Supplies", "slug": "bird-supplies", "price": (9.99, 129.99),
-             "nouns": ["Bird Cage", "Bird Food", "Perch", "Nest Box", "Swing Toy", "Bird Bath"],
+             "nouns": ["Bird Cage", "Bird Food", "Perch", "Nest Box", "Swing Toy", "Bird Bath", "Mineral Block"],
              "adjs": ["Stainless Steel", "Spacious", "Easy-Clean", "Natural Wood", "Colorful"],
              "brands": ["WingPro", "BirdHome", "FeatherX", "AvianCare", "NestMate"]},
+            {"name": "Fish & Aquarium", "slug": "fish-aquarium", "price": (7.99, 299.99),
+             "nouns": ["Aquarium Tank", "Filter", "Heater", "Fish Food", "Gravel", "LED Light", "Air Pump"],
+             "adjs": ["20-Gallon", "Freshwater", "Saltwater", "Submersible", "Quiet-Flow"],
+             "brands": ["AquaPro", "FishTank", "WaterWorld", "ClearStream", "AquaLife"]},
         ]
     },
-    # ── Tools & Home Improvement ──────────────────────────────────────────────
+    # ── Food & Grocery ────────────────────────────────────────────────────────
     {
-        "root": "Tools & Home Improvement", "root_slug": "tools-home",
+        "root": "Food & Grocery", "root_slug": "food-grocery",
+        "seller_email": "seller09@foodcraft.com",
         "leaves": [
-            {"name": "Power Tools", "slug": "power-tools", "price": (29.99, 599.99),
-             "nouns": ["Drill", "Circular Saw", "Jigsaw", "Angle Grinder", "Random Sander", "Router"],
-             "adjs": ["20V", "Brushless", "Cordless", "Variable-Speed", "Heavy-Duty"],
-             "brands": ["PowerMax", "DrillPro", "ToolMaster", "WorkForce", "BuildX"]},
-            {"name": "Hand Tools", "slug": "hand-tools", "price": (7.99, 149.99),
-             "nouns": ["Hammer", "Screwdriver Set", "Wrench Set", "Pliers", "Level", "Utility Knife"],
-             "adjs": ["Chrome-Vanadium", "Ergonomic", "Magnetic", "Professional-Grade", "Anti-Slip"],
-             "brands": ["GripPro", "ToolCraft", "HandMax", "WorkBench", "SteelTool"]},
-            {"name": "Electrical", "slug": "electrical", "price": (4.99, 249.99),
-             "nouns": ["Extension Cord", "Wire Stripper", "Multimeter", "Circuit Breaker", "LED Bulb", "Outlet"],
-             "adjs": ["Heavy-Duty", "Smart", "Surge-Protected", "12-Gauge", "Waterproof"],
-             "brands": ["ElectroPro", "WireMaster", "VoltX", "CircuitSafe", "PowerLine"]},
-            {"name": "Plumbing", "slug": "plumbing", "price": (4.99, 199.99),
-             "nouns": ["Pipe Wrench", "Plunger", "Pipe Tape", "Faucet", "Drain Cleaner", "Valve"],
-             "adjs": ["Heavy-Duty", "Compression-Fit", "Lead-Free", "Flexible", "Rust-Proof"],
-             "brands": ["PipeMax", "FlowPro", "DrainMaster", "PlumbX", "WaterSeal"]},
+            {"name": "Snacks & Chips", "slug": "snacks", "price": (1.99, 24.99),
+             "nouns": ["Chips", "Popcorn", "Nuts Mix", "Crackers", "Granola Bar", "Trail Mix", "Pretzels"],
+             "adjs": ["Sea Salt", "Spicy", "Organic", "Gluten-Free", "Low-Calorie"],
+             "brands": ["CrunchCo", "SnackBurst", "NatureBites", "CrispyPop", "GoodMunch"]},
+            {"name": "Coffee & Tea", "slug": "coffee-tea", "price": (7.99, 59.99),
+             "nouns": ["Ground Coffee", "Whole Bean Coffee", "Green Tea", "Herbal Tea", "Cold Brew", "Espresso Pods"],
+             "adjs": ["Single-Origin", "Dark Roast", "Organic", "Fairtrade", "Medium Roast"],
+             "brands": ["BrewMaster", "LeafOrigin", "CoffeeCraft", "TeaHaven", "PureRoast"]},
+            {"name": "Organic & Natural Foods", "slug": "organic-foods", "price": (4.99, 49.99),
+             "nouns": ["Quinoa", "Chia Seeds", "Coconut Oil", "Almond Butter", "Oat Flour", "Raw Honey", "Flax Seeds"],
+             "adjs": ["USDA Organic", "Non-GMO", "Raw", "Cold-Pressed", "100% Natural"],
+             "brands": ["OrganicRoots", "EarthFirst", "PureHarvest", "GreenField", "NaturePure"]},
+            {"name": "Beverages & Drinks", "slug": "beverages", "price": (1.49, 39.99),
+             "nouns": ["Sparkling Water", "Protein Shake", "Energy Drink", "Juice", "Kombucha", "Electrolyte Drink"],
+             "adjs": ["Sugar-Free", "Zero-Calorie", "Vitamin-Enriched", "Natural", "Carbonated"],
+             "brands": ["HydroBoost", "VitaSip", "RefreshCo", "DrinkWell", "BubbleX"]},
         ]
     },
-    # ── Travel & Luggage ──────────────────────────────────────────────────────
+    # ── Musical Instruments ───────────────────────────────────────────────────
     {
-        "root": "Travel & Luggage", "root_slug": "travel-luggage",
+        "root": "Musical Instruments", "root_slug": "musical-instruments",
+        "seller_email": "seller10@musiczone.com",
         "leaves": [
-            {"name": "Suitcases", "slug": "suitcases", "price": (49.99, 399.99),
-             "nouns": ["Carry-On", "Checked Suitcase", "Spinner Luggage", "Hard-Shell Case", "Luggage Set"],
-             "adjs": ["Lightweight", "TSA-Approved", "Expandable", "360-Spinner", "Polycarbonate"],
-             "brands": ["TravelPro", "JourneyX", "LuggagePlus", "RoamCo", "GlobeTrekker"]},
-            {"name": "Backpacks & Bags", "slug": "travel-backpacks", "price": (29.99, 249.99),
-             "nouns": ["Travel Backpack", "Laptop Bag", "Duffel Bag", "Tote Bag", "Drawstring Bag", "Messenger Bag"],
-             "adjs": ["Water-Resistant", "Anti-Theft", "30L", "Convertible", "Slim-Profile"],
-             "brands": ["PackPro", "BagMaster", "CarryX", "TravelGear", "BackpackCo"]},
-            {"name": "Travel Accessories", "slug": "travel-accessories", "price": (4.99, 79.99),
-             "nouns": ["Travel Pillow", "Packing Cubes", "Luggage Tag", "Travel Adapter", "Neck Wallet"],
-             "adjs": ["Memory Foam", "Compression", "RFID-Blocking", "Universal", "Foldable"],
-             "brands": ["TravelX", "PackLight", "JetSet", "RoamSafe", "ComfortTravel"]},
-        ]
-    },
-    # ── Video Games ───────────────────────────────────────────────────────────
-    {
-        "root": "Video Games", "root_slug": "video-games",
-        "leaves": [
-            {"name": "PlayStation", "slug": "playstation", "price": (9.99, 79.99),
-             "nouns": ["PS5 Game", "PS4 Game", "DualSense Controller", "PS5 Headset", "PS Plus Card"],
-             "adjs": ["Action", "RPG", "Open-World", "Multiplayer", "Exclusive"],
-             "brands": ["SonyGames", "PlaystationX", "PS Studio", "GameVault", "DigitalPlay"]},
-            {"name": "Xbox", "slug": "xbox", "price": (9.99, 79.99),
-             "nouns": ["Xbox Game", "Xbox Controller", "Game Pass Card", "Headset", "Charging Dock"],
-             "adjs": ["4K", "FPS", "Strategy", "Exclusive", "Cross-Play"],
-             "brands": ["XboxStore", "MicrosoftGames", "GamePass", "XboxPro", "GameHub"]},
-            {"name": "Nintendo Switch", "slug": "nintendo-switch", "price": (9.99, 79.99),
-             "nouns": ["Switch Game", "Joy-Con", "Switch Case", "Screen Protector", "Pro Controller"],
-             "adjs": ["Family-Friendly", "Adventure", "Puzzle", "Portable", "Co-op"],
-             "brands": ["NintendoX", "SwitchPro", "GameBridge", "NintenStore", "HanHeld"]},
-            {"name": "PC Gaming", "slug": "pc-gaming", "price": (19.99, 199.99),
-             "nouns": ["Gaming Mouse", "Mechanical Keyboard", "Gaming Headset", "Mouse Pad", "PC Game Key"],
-             "adjs": ["RGB", "High-DPI", "Wireless", "Surround-Sound", "Programmable"],
-             "brands": ["GameGear", "PCMaster", "RGBpro", "ClickMax", "FPSking"]},
+            {"name": "Guitars & Bass", "slug": "guitars-bass", "price": (79.99, 1499.99),
+             "nouns": ["Acoustic Guitar", "Electric Guitar", "Bass Guitar", "Classical Guitar", "Travel Guitar", "Guitar Bundle"],
+             "adjs": ["Solid-Top", "Mahogany", "Rosewood Fingerboard", "Sunburst Finish", "Beginner-Friendly"],
+             "brands": ["StringMaster", "ChordCraft", "MelodyX", "FretBoard", "SoundWave"]},
+            {"name": "Keyboards & Pianos", "slug": "keyboards-pianos", "price": (99.99, 1999.99),
+             "nouns": ["Digital Piano", "MIDI Keyboard", "Synthesizer", "Stage Piano", "Arranger Keyboard", "Mini Keyboard"],
+             "adjs": ["88-Key", "Weighted Keys", "Semi-Weighted", "Bluetooth", "Portable"],
+             "brands": ["KeyMaster", "PianoX", "SynthPro", "DigitalKeys", "IvoryTouch"]},
+            {"name": "Drums & Percussion", "slug": "drums-percussion", "price": (49.99, 999.99),
+             "nouns": ["Electronic Drum Kit", "Snare Drum", "Djembe", "Cajon", "Drum Pad", "Cymbal Set", "Drum Sticks"],
+             "adjs": ["Mesh-Head", "Professional", "Practice-Ready", "Acoustic", "8-Piece"],
+             "brands": ["BeatCraft", "RhythmX", "DrumMaster", "PercussionPro", "StickHit"]},
+            {"name": "Studio Equipment", "slug": "studio-equipment", "price": (29.99, 799.99),
+             "nouns": ["Audio Interface", "Studio Monitor", "Condenser Microphone", "Studio Headphones", "MIDI Controller", "Pop Filter"],
+             "adjs": ["XLR", "USB", "Studio-Grade", "Dynamic", "Professional"],
+             "brands": ["StudioX", "RecordPro", "AudioCraft", "SoundBooth", "MixMaster"]},
         ]
     },
 ]
 
 
 def _leaf_categories():
-    """Flatten TAXONOMY into a list of leaf dicts with root metadata."""
-    leaves = []
-    for group in TAXONOMY:
-        for leaf in group["leaves"]:
-            leaves.append({**leaf, "_root": group["root"], "_root_slug": group["root_slug"]})
-    return leaves
+    return [
+        {**leaf, "_root": group["root"], "_root_slug": group["root_slug"], "_seller_email": group["seller_email"]}
+        for group in TAXONOMY
+        for leaf in group["leaves"]
+    ]
 
 
 LEAF_CATEGORIES = _leaf_categories()
 
 
+# ── Image helpers ──────────────────────────────────────────────────────────────
+
+def _name_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40]
+
+
 # ── Seeding functions ──────────────────────────────────────────────────────────
 
-def seed_sellers(users_conn, dry_run: bool) -> list[str]:
+def cleanup_data(users_conn, prod_conn, carts_conn, orders_conn, payments_conn, dry_run: bool):
+    """Wipe all transactional and seed data, preserving the 3 sample users."""
+    if dry_run:
+        print("  [dry-run] would truncate products, categories, carts, orders, payments DBs")
+        print("  [dry-run] would delete all sellers except protected sample users")
+        return
+
+    # ── Products DB (leaf tables first; categories.id → products.category_id is SET NULL) ──
+    for stmt in [
+        "TRUNCATE stock_movements RESTART IDENTITY CASCADE",
+        "TRUNCATE product_reviews RESTART IDENTITY CASCADE",
+        "TRUNCATE product_images RESTART IDENTITY CASCADE",
+        "TRUNCATE products RESTART IDENTITY CASCADE",
+        "TRUNCATE categories RESTART IDENTITY CASCADE",
+    ]:
+        prod_conn.execute(stmt)
+    prod_conn.commit()
+
+    # ── Users DB (ON DELETE CASCADE handles profiles, addresses, tokens) ──
+    placeholders = ", ".join(f"'{uid}'" for uid in PROTECTED_USER_IDS)
+    users_conn.execute(
+        f"DELETE FROM users WHERE role = 'seller' AND id NOT IN ({placeholders})"
+    )
+    users_conn.commit()
+
+    # ── Carts DB ──
+    carts_conn.execute("TRUNCATE cart_items, carts RESTART IDENTITY CASCADE")
+    carts_conn.commit()
+
+    # ── Orders DB (notifications has no CASCADE from orders — must go first) ──
+    for stmt in [
+        "TRUNCATE orders_outbox RESTART IDENTITY CASCADE",
+        "TRUNCATE notifications RESTART IDENTITY CASCADE",
+        "TRUNCATE order_status_history RESTART IDENTITY CASCADE",
+        "TRUNCATE order_items RESTART IDENTITY CASCADE",
+        "TRUNCATE orders RESTART IDENTITY CASCADE",
+    ]:
+        orders_conn.execute(stmt)
+    orders_conn.commit()
+
+    # ── Payments DB ──
+    payments_conn.execute("TRUNCATE payment_history, payments RESTART IDENTITY CASCADE")
+    payments_conn.commit()
+
+
+def seed_sellers(users_conn, dry_run: bool) -> dict:
+    """Insert 10 sellers. Returns {email: uuid_str}."""
     pw_hash = bcrypt.hashpw(SELLER_PASSWORD.encode(), bcrypt.gensalt(rounds=10)).decode()
     for s in SELLERS:
         if not dry_run:
@@ -367,16 +407,15 @@ def seed_sellers(users_conn, dry_run: bool) -> list[str]:
             )
     if not dry_run:
         users_conn.commit()
-    return [s["id"] for s in SELLERS]
+    return {s["email"]: s["id"] for s in SELLERS}
 
 
 def seed_categories(prod_conn, dry_run: bool) -> dict:
-    """Insert new root + leaf categories, return slug→id mapping for all leaves."""
-    cat_id_map = {}
+    """Insert root + leaf categories. Returns {leaf_slug: category_id}."""
+    sort_order = 0
 
-    # Insert root categories
-    root_slugs = {}
     for group in TAXONOMY:
+        sort_order += 1
         if not dry_run:
             prod_conn.execute(
                 """
@@ -384,22 +423,25 @@ def seed_categories(prod_conn, dry_run: bool) -> dict:
                 VALUES (%s, %s, NULL, %s)
                 ON CONFLICT (slug) DO NOTHING
                 """,
-                (group["root"], group["root_slug"], len(root_slugs) + 13),
+                (group["root"], group["root_slug"], sort_order),
             )
-        root_slugs[group["root_slug"]] = group
 
-    # Fetch all root IDs (including pre-existing ones from V2)
-    rows = prod_conn.execute(
-        "SELECT slug, id FROM categories WHERE parent_id IS NULL"
-    ).fetchall()
-    root_id_by_slug = {r[0]: r[1] for r in rows}
+    if not dry_run:
+        prod_conn.commit()
 
-    # Insert leaf categories
-    sort_order = 0
+    # Fetch all root IDs
+    root_id_by_slug = {}
+    if not dry_run:
+        rows = prod_conn.execute(
+            "SELECT slug, id FROM categories WHERE parent_id IS NULL"
+        ).fetchall()
+        root_id_by_slug = {r[0]: r[1] for r in rows}
+
+    leaf_sort = 0
     for group in TAXONOMY:
         root_id = root_id_by_slug.get(group["root_slug"])
         for leaf in group["leaves"]:
-            sort_order += 1
+            leaf_sort += 1
             if not dry_run:
                 prod_conn.execute(
                     """
@@ -407,49 +449,43 @@ def seed_categories(prod_conn, dry_run: bool) -> dict:
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (slug) DO NOTHING
                     """,
-                    (leaf["name"], leaf["slug"], root_id, sort_order),
+                    (leaf["name"], leaf["slug"], root_id, leaf_sort),
                 )
 
     if not dry_run:
         prod_conn.commit()
 
-    # Fetch all leaf IDs
-    rows = prod_conn.execute(
-        "SELECT slug, id FROM categories WHERE parent_id IS NOT NULL"
-    ).fetchall()
-    for slug, cid in rows:
-        cat_id_map[slug] = cid
+    cat_id_map = {}
+    if not dry_run:
+        rows = prod_conn.execute(
+            "SELECT slug, id FROM categories WHERE parent_id IS NOT NULL"
+        ).fetchall()
+        cat_id_map = {slug: cid for slug, cid in rows}
 
     return cat_id_map
 
 
 def _make_name(leaf: dict) -> str:
     brand = random.choice(leaf["brands"])
-    adj = random.choice(leaf["adjs"])
-    noun = random.choice(leaf["nouns"])
-    # Occasionally add a suffix for variety
+    adj   = random.choice(leaf["adjs"])
+    noun  = random.choice(leaf["nouns"])
     suffix = random.choice(["", " Pro", " Plus", " Lite", " Max", " X", " 2.0", " Premium", ""])
     return f"{brand} {adj} {noun}{suffix}"
 
 
 def _make_description(leaf: dict) -> str:
-    noun = random.choice(leaf["nouns"])
-    adj1 = random.choice(leaf["adjs"])
-    adj2 = random.choice(leaf["adjs"])
-    cat_name = leaf["name"]
+    noun  = random.choice(leaf["nouns"])
+    adj1  = random.choice(leaf["adjs"])
+    adj2  = random.choice(leaf["adjs"])
+    cat   = leaf["name"]
     options = [
-        f"{adj1} {noun} for everyday use. Perfect for {cat_name} enthusiasts. {adj2} design with premium materials.",
-        f"High-quality {noun} featuring {adj1} technology. Ideal for {cat_name}. Includes {adj2} finish.",
-        f"Professional-grade {noun}. {adj1} performance meets {adj2} durability. Trusted by {cat_name} professionals.",
-        f"Compact {adj1} {noun} with {adj2} build quality. Best in class for {cat_name} needs.",
-        f"{adj1} {noun} — redefining {cat_name}. {adj2} construction, long-lasting performance.",
+        f"{adj1} {noun} for everyday use. Perfect for {cat} enthusiasts. {adj2} design with premium materials.",
+        f"High-quality {noun} featuring {adj1} technology. Ideal for {cat}. Includes {adj2} finish.",
+        f"Professional-grade {noun}. {adj1} performance meets {adj2} durability. Trusted by {cat} professionals.",
+        f"Compact {adj1} {noun} with {adj2} build quality. Best in class for {cat} needs.",
+        f"{adj1} {noun} — redefining {cat}. {adj2} construction, long-lasting performance.",
     ]
     return random.choice(options)
-
-
-def _make_price(leaf: dict) -> str:
-    lo, hi = leaf["price"]
-    return str(round(random.uniform(lo, hi), 2))
 
 
 def _make_status(i: int) -> str:
@@ -460,21 +496,18 @@ def _make_status(i: int) -> str:
     return "ACTIVE"
 
 
-def seed_products(prod_conn, cat_id_map: dict, seller_ids: list, target: int, dry_run: bool) -> int:
-    """Stream 100K product rows via COPY. Returns the minimum inserted product id."""
+def seed_products(prod_conn, cat_id_map: dict, seller_id_by_leaf_slug: dict, target: int, dry_run: bool) -> int:
+    """Stream products via COPY. Returns the min inserted product id."""
     if dry_run:
-        print(f"  [dry-run] would insert {target} products")
+        print(f"  [dry-run] would insert {target:,} products")
         return -1
 
-    # Map leaf slugs that exist in cat_id_map
     available_leaves = [lf for lf in LEAF_CATEGORIES if lf["slug"] in cat_id_map]
     if not available_leaves:
-        raise RuntimeError("No leaf categories found in DB — run seed_categories first.")
+        raise RuntimeError("No leaf categories found — run seed_categories first.")
 
-    seller_cycle = itertools.cycle(seller_ids)
     leaf_cycle = itertools.cycle(available_leaves)
 
-    # Get current max product id
     row = prod_conn.execute("SELECT COALESCE(MAX(id), 0) FROM products").fetchone()
     id_before = row[0]
 
@@ -482,33 +515,37 @@ def seed_products(prod_conn, cat_id_map: dict, seller_ids: list, target: int, dr
         "COPY products (name, description, price, category_id, seller_id, status, stock_quantity, stock_reserved, version) FROM STDIN"
     ) as copy:
         for i in range(1, target + 1):
-            leaf = next(leaf_cycle)
-            cat_id = cat_id_map[leaf["slug"]]
-            seller_id = next(seller_cycle)
-            status = _make_status(i)
-            stock_qty = random.randint(0, 500)
-            stock_reserved = random.randint(0, min(10, stock_qty)) if status == "ACTIVE" else 0
+            leaf      = next(leaf_cycle)
+            cat_id    = cat_id_map[leaf["slug"]]
+            seller_id = seller_id_by_leaf_slug[leaf["slug"]]
+            status    = _make_status(i)
+            stock_qty = random.randint(10, 500)
+            stock_res = random.randint(0, min(10, stock_qty)) if status == "ACTIVE" else 0
+            price     = round(random.uniform(*leaf["price"]), 2)
             copy.write_row((
                 _make_name(leaf),
                 _make_description(leaf),
-                _make_price(leaf),
+                str(price),
                 cat_id,
                 seller_id,
                 status,
                 stock_qty,
-                stock_reserved,
+                stock_res,
                 0,
             ))
 
     prod_conn.commit()
 
-    row = prod_conn.execute("SELECT COALESCE(MIN(id), 0) FROM products WHERE id > %s", (id_before,)).fetchone()
+    row = prod_conn.execute(
+        "SELECT COALESCE(MIN(id), 0) FROM products WHERE id > %s", (id_before,)
+    ).fetchone()
     return row[0]
 
 
-def seed_images(prod_conn, min_product_id: int, dry_run: bool):
+def seed_images(prod_conn, min_product_id: int, dry_run: bool) -> int:
+    """Give every product exactly 2 picsum images with name-slug seeds."""
     if dry_run or min_product_id <= 0:
-        return
+        return 0
 
     ids = prod_conn.execute(
         "SELECT id, name FROM products WHERE id >= %s ORDER BY id", (min_product_id,)
@@ -518,11 +555,11 @@ def seed_images(prod_conn, min_product_id: int, dry_run: bool):
         "COPY product_images (product_id, url, alt_text, sort_order) FROM STDIN"
     ) as copy:
         for pid, name in ids:
-            # Primary image for every product
-            copy.write_row((pid, f"https://picsum.photos/seed/p{pid}/600/400", f"{name[:80]} — main view", 0))
-            # Secondary image for ~50% of products
-            if pid % 2 == 0:
-                copy.write_row((pid, f"https://picsum.photos/seed/p{pid}b/600/400", f"{name[:80]} — side view", 1))
+            slug = _name_slug(name)
+            copy.write_row((pid, f"https://picsum.photos/seed/{slug}-primary/600/400",
+                            f"{name[:80]} — main view", 0))
+            copy.write_row((pid, f"https://picsum.photos/seed/{slug}-alt/600/400",
+                            f"{name[:80]} — alternate view", 1))
 
     prod_conn.commit()
     return len(ids)
@@ -531,65 +568,88 @@ def seed_images(prod_conn, min_product_id: int, dry_run: bool):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed sellers, categories, and products.")
-    parser.add_argument("--target", type=int, default=100_000, help="Number of products to insert (default: 100000)")
+    parser = argparse.ArgumentParser(description="Clean and reseed ecommerce data.")
+    parser.add_argument("--target",       type=int,          default=10_000, help="Products to seed (default: 10000)")
+    parser.add_argument("--skip-clean",   action="store_true", help="Skip cleanup step (additive mode)")
     parser.add_argument("--skip-sellers", action="store_true", help="Skip seller user seeding")
-    parser.add_argument("--skip-images", action="store_true", help="Skip product_images seeding")
-    parser.add_argument("--dry-run", action="store_true", help="Count only — no writes")
+    parser.add_argument("--skip-images",  action="store_true", help="Skip product image seeding")
+    parser.add_argument("--dry-run",      action="store_true", help="Print only — no DB writes")
     args = parser.parse_args()
 
     random.seed(42)
     t0 = time.time()
 
-    print(f"{'[DRY RUN] ' if args.dry_run else ''}Connecting to databases...")
-    users_conn = psycopg.connect(USERS_DSN)
-    prod_conn = psycopg.connect(PRODUCTS_DSN)
+    print(f"{'[DRY RUN] ' if args.dry_run else ''}Connecting to all 5 databases...")
+    users_conn    = psycopg.connect(USERS_DSN)
+    prod_conn     = psycopg.connect(PRODUCTS_DSN)
+    carts_conn    = psycopg.connect(CARTS_DSN)
+    orders_conn   = psycopg.connect(ORDERS_DSN)
+    payments_conn = psycopg.connect(PAYMENTS_DSN)
 
-    # 1. Sellers
-    if not args.skip_sellers:
-        print(f"Seeding {len(SELLERS)} sellers into ecommerce_users...", end=" ", flush=True)
-        seller_ids = seed_sellers(users_conn, args.dry_run)
-        print(f"done ({len(seller_ids)} sellers)")
+    # 1. Cleanup
+    if not args.skip_clean:
+        print("Cleaning existing data (products, categories, carts, orders, payments, sellers)...", end=" ", flush=True)
+        cleanup_data(users_conn, prod_conn, carts_conn, orders_conn, payments_conn, args.dry_run)
+        print("done")
     else:
-        seller_ids = [s["id"] for s in SELLERS]
-        print(f"Skipping sellers — using {len(seller_ids)} pre-defined UUIDs")
+        print("Skipping cleanup (--skip-clean)")
 
-    # 2. Categories
+    # 2. Sellers
+    if not args.skip_sellers:
+        print(f"Seeding {len(SELLERS)} sellers...", end=" ", flush=True)
+        seller_email_to_id = seed_sellers(users_conn, args.dry_run)
+        print(f"done")
+    else:
+        seller_email_to_id = {s["email"]: s["id"] for s in SELLERS}
+        print(f"Skipping sellers — using pre-defined UUIDs")
+
+    # 3. Categories
     print("Seeding categories...", end=" ", flush=True)
     cat_id_map = seed_categories(prod_conn, args.dry_run)
-    print(f"done ({len(cat_id_map)} leaf categories mapped)")
+    n_roots  = len(TAXONOMY)
+    n_leaves = sum(len(g["leaves"]) for g in TAXONOMY)
+    print(f"done ({n_roots} root, {n_leaves} leaf categories)")
 
-    # 3. Products
+    # 4. Build seller-by-leaf-slug mapping
+    seller_id_by_leaf_slug = {
+        leaf["slug"]: seller_email_to_id.get(group["seller_email"], group["seller_email"])
+        for group in TAXONOMY
+        for leaf in group["leaves"]
+    }
+
+    # 5. Products
     print(f"Seeding {args.target:,} products via COPY...", end=" ", flush=True)
     t_prod = time.time()
-    min_id = seed_products(prod_conn, cat_id_map, seller_ids, args.target, args.dry_run)
-    elapsed_prod = time.time() - t_prod
-    print(f"done in {elapsed_prod:.1f}s")
+    min_id = seed_products(prod_conn, cat_id_map, seller_id_by_leaf_slug, args.target, args.dry_run)
+    print(f"done in {time.time() - t_prod:.1f}s")
 
-    # 4. Images
+    # 6. Images
     if not args.skip_images:
-        print("Seeding product images via COPY...", end=" ", flush=True)
+        print("Seeding product images via COPY (2 per product)...", end=" ", flush=True)
         t_img = time.time()
-        img_count = seed_images(prod_conn, min_id, args.dry_run)
-        elapsed_img = time.time() - t_img
-        if img_count:
-            print(f"done in {elapsed_img:.1f}s ({img_count + img_count // 2:,} images)")
+        n_products = seed_images(prod_conn, min_id, args.dry_run)
+        if n_products:
+            print(f"done in {time.time() - t_img:.1f}s ({n_products * 2:,} images for {n_products:,} products)")
         else:
-            print("skipped (dry-run or no new products)")
+            print("skipped")
 
     users_conn.close()
     prod_conn.close()
+    carts_conn.close()
+    orders_conn.close()
+    payments_conn.close()
 
-    total = time.time() - t0
-    print(f"\nTotal: {args.target:,} products seeded in {total:.1f}s")
+    print(f"\nTotal elapsed: {time.time() - t0:.1f}s")
 
     if not args.dry_run and not args.skip_sellers:
         print(f"\nSeller accounts (password: {SELLER_PASSWORD}):")
         for s in SELLERS:
-            print(f"  {s['email']:<35} → {s['id']}")
+            print(f"  {s['email']:<38} → {s['id']}  [{s['store']}]")
 
     print("\nNext step — generate embeddings:")
     print("  docker exec -it ecommerce-ai-service python scripts/embed_products.py")
+    print("\n  (or expose port 9000 in docker-compose.yml and run:)")
+    print("  python3 script/embed_products.py")
 
 
 if __name__ == "__main__":
