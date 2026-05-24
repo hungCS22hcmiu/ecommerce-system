@@ -11,11 +11,12 @@ The `cart-service` is a Go microservice (Gin + GORM) that manages **shopping car
 **Responsibilities:**
 - Redis-first cart storage: every cart operation is a Redis Hash operation, never a direct Postgres write
 - WATCH/MULTI/EXEC optimistic locking on every cart write — no lost updates under concurrent requests
-- Synchronous product validation (existence, active status, current price) on `AddItem`
+- Synchronous product validation (existence, active status, available stock, seller ownership) on `AddItem`
+- Redis product-validation cache wrapping `GetProduct` (key `product:v:{id}`, 5s TTL) — cache hits skip the circuit breaker entirely
 - Circuit-breaking product-service calls: 5 consecutive failures → 30s OPEN state, fast-fail without waiting
 - Background goroutine syncing Redis → PostgreSQL every 30 seconds for durability
 - JWT validation using the same RSA public key issued by user-service
-- Snapshot of product name, unit price, and seller context at add-time — frontend uses this to group items by seller and display cart totals without calling product-service at render time
+- Snapshot of product name and unit price at add-time — frontend fetches product images from product-service separately at render time
 
 ---
 
@@ -23,7 +24,7 @@ The `cart-service` is a Go microservice (Gin + GORM) that manages **shopping car
 
 ### In this project
 - Carts are written on nearly every user action (add, update, remove, clear). Hitting Postgres directly on every operation would be slow and would create unnecessary write load on the shared DB. Redis Hash operations are sub-millisecond and O(1).
-- Price, product name, and seller ID are snapshotted into Redis at the moment of `AddItem`. UpdateItem skips the product-service call entirely — the price doesn't change retroactively for items already in a cart, just as a real price tag doesn't change while it's in your basket. The frontend uses the snapshotted seller ID to group cart items by seller, and separately fetches product images from product-service for display — this extra rendering data is fetched by the browser, not by cart-service itself.
+- Product name and price are snapshotted into Redis at the moment of `AddItem`. UpdateItem skips the product-service call entirely — the price doesn't change retroactively for items already in a cart, just as a real price tag doesn't change while it's in your basket. Product images are fetched by the browser from product-service at render time — cart-service never stores them.
 - The circuit breaker ensures cart reads (`GetCart`, `UpdateItem`, `RemoveItem`) keep working even when product-service is down. Only `AddItem` is blocked during an outage, because that's the only operation that actually needs product validation.
 
 ### In real-world systems
@@ -43,20 +44,23 @@ POST /api/v1/cart/items  Authorization: Bearer <token>  body:{product_id, quanti
     ├─ CartHandler.AddItem: parse + validate body (@validator)
     │
     ├─ CartService.AddItem:
-    │     ├─ cb.Allow()? → false (circuit OPEN) → return ErrProductServiceUnavailable → 503
     │     │
     │     ├─ productClient.GetProduct(productID)
+    │     │     ├─ cache.get("product:v:{id}")? → hit (5s Redis TTL) → return cached, skip CB
+    │     │     ├─ cb.Allow()? → false (circuit OPEN) → return ErrServiceUnavailable → 503
     │     │     ├─ HTTP GET product-service:8081/api/v1/products/{id}  timeout=5s
-    │     │     ├─ On 5xx / timeout: retry up to 3× (100ms, 200ms backoff)
+    │     │     ├─ On 5xx / timeout: retry up to 3× (200ms, 400ms backoff)
     │     │     ├─ All 3 fail → cb.RecordFailure() → (at 5 failures: circuit opens)
-    │     │     ├─ 404 → ErrNotFound (no retry, no CB failure)
-    │     │     └─ 200 + status≠ACTIVE → ErrNotFound
+    │     │     ├─ 404 → ErrNotFound (no retry, cb.RecordSuccess())
+    │     │     ├─ 200 + status≠ACTIVE → ErrNotFound (cb.RecordSuccess())
+    │     │     └─ 200 + ACTIVE → cache.set(5s TTL), cb.RecordSuccess(), return ProductInfo
     │     │
-    │     ├─ product found: snapshot name + price into CartItemValue
+    │     ├─ product.StockAvailable < req.Quantity → ErrInsufficientStock → 409
+    │     ├─ product.SellerID == userID → ErrSellerCannotBuyOwnProduct → 403
+    │     ├─ snapshot name + price into CartItemValue (no sellerID stored in Redis)
     │     │
     │     └─ redisRepo.AddOrUpdateItem(userID, productID, CartItemValue)
     │           ├─ WATCH cart:{userID}
-    │           ├─ HGETALL → current state
     │           ├─ MULTI
     │           │    └─ HSET cart:{userID} {productID} <json>
     │           │    └─ EXPIRE cart:{userID} 7 days   (refresh TTL)
@@ -98,6 +102,7 @@ Authorization: Bearer eyJhbGc...
     │     └─ Verifies signature + expiry automatically
     ├─ uuid.Parse(claims.UserID) → typed uuid.UUID
     ├─ c.Set("userID", userID)   ← stored as uuid.UUID, not string
+    ├─ c.Set("role", claims.Role)
     └─ c.Next()
 
 No blacklist check — cart is low-security; 15-min token TTL is sufficient.
@@ -111,8 +116,9 @@ No blacklist check — cart is low-security; 15-min token TTL is sufficient.
                   ┌──────────────────────────────────────────────────────┐
                   │                   cart-service                        │
                   │                                                       │
-HTTP ─────────────┤  middleware: Auth(JWT) → Logger → Recovery           │
-(Bearer token)    │                    │                                  │
+HTTP ─────────────┤  middleware: Recovery → Correlation → Logger (global) │
+(Bearer token)    │              Auth(JWT) applied per-route group        │
+                  │                    │                                  │
                   │              CartHandler                              │
                   │                    │                                  │
                   │              CartService                              │
@@ -141,11 +147,12 @@ HTTP ─────────────┤  middleware: Auth(JWT) → Logge
 |---|---|
 | `internal/repository/redis_cart_repository.go` | WATCH/MULTI/EXEC cart operations; all Redis Hash logic |
 | `internal/repository/cart_repository.go` | GORM Postgres repo; used only by sync worker and ClearCart |
-| `internal/service/cart_service.go` | Business logic; coordinates product validation + Redis writes |
-| `internal/client/product_client.go` | HTTP client with 5s timeout, 3-attempt retry, circuit breaker |
+| `internal/service/cart_service.go` | Business logic; product validation, stock/seller checks, Redis writes |
+| `internal/client/product_client.go` | HTTP client: 5s timeout, 3-attempt retry, circuit breaker, 5s Redis cache |
 | `internal/client/circuit_breaker.go` | Three-state CB: CLOSED → OPEN (5 failures) → HALF_OPEN (30s) |
 | `internal/cache/sync.go` | Background goroutine; Redis SCAN → Postgres upsert every 30s |
-| `internal/middleware/auth.go` | RS256 JWT validation; injects `uuid.UUID` into Gin context |
+| `internal/middleware/auth.go` | RS256 JWT validation; injects `uuid.UUID` and role into Gin context |
+| `internal/middleware/correlation.go` | Reads/generates `X-Correlation-ID`; forwards to product-service via context |
 | `pkg/jwt/` | LoadPublicKey + ValidateToken (shared pattern with user-service) |
 
 ### Redis data model
@@ -153,6 +160,9 @@ HTTP ─────────────┤  middleware: Auth(JWT) → Logge
 Key:    cart:{userID}          (type: Hash, TTL: 7 days, refreshed on every write)
 Field:  {productID as string}
 Value:  {"product_name":"Widget","quantity":2,"unit_price":9.99}  (JSON)
+
+Key:    product:v:{productID}  (type: String, TTL: 5 seconds — product-validation cache)
+Value:  {"id":1,"name":"Widget","price":9.99,"status":"ACTIVE","stockAvailable":42,"sellerId":"..."}  (JSON)
 ```
 
 ### Circuit breaker states
@@ -175,18 +185,21 @@ CLOSED ──(5 consecutive failures)──► OPEN ──(30s elapsed)──►
 func (r *redisCartRepository) AddOrUpdateItem(
     ctx context.Context, userID uuid.UUID, productID int64, val CartItemValue,
 ) error {
-    key := fmt.Sprintf("cart:%s", userID)
+    key   := fmt.Sprintf("cart:%s", userID)
+    field := strconv.FormatInt(productID, 10)
+    jsonVal, _ := json.Marshal(val) // marshaled once, outside the retry loop
 
-    for range 3 { // retry up to 3 times on concurrent modification
+    for retries := 0; retries < 3; retries++ {
         err := r.rdb.Watch(ctx, func(tx *redis.Tx) error {
-            data, _ := json.Marshal(val)
+            // No read here — pure optimistic write.
+            // WATCH detects if another client modified the key before EXEC.
             _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-                pipe.HSet(ctx, key, strconv.FormatInt(productID, 10), string(data))
+                pipe.HSet(ctx, key, field, jsonVal)
                 pipe.Expire(ctx, key, 7*24*time.Hour) // refresh TTL
                 return nil
             })
             return err
-        }, key) // WATCH key — if it changes before EXEC, TxPipelined returns TxFailedErr
+        }, key) // WATCH key — if it changed before EXEC, TxPipelined returns TxFailedErr
 
         if err == nil { return nil }
         if !errors.Is(err, redis.TxFailedErr) { return err }
@@ -208,7 +221,8 @@ func (c *productClient) GetProduct(ctx context.Context, productID int64) (*Produ
     var lastErr error
     for attempt := range 3 {
         if attempt > 0 {
-            time.Sleep(time.Duration(100<<attempt) * time.Millisecond) // 200ms, 400ms
+            // attempt=1 → 200ms, attempt=2 → 400ms
+            time.Sleep(time.Duration(100<<attempt) * time.Millisecond)
         }
         resp, err := c.httpClient.Do(req)
         if err == nil && resp.StatusCode < 500 {
@@ -305,7 +319,7 @@ Five failures (not 1) avoids false-positives from transient network blips. Thirt
 
 **A:** This is a deliberate product design decision, not a technical constraint. Showing users the price they saw when they added the item avoids a jarring experience where a price changes between browsing and checkout. It also decouples the cart from the product-service at checkout time — the cart doesn't need to make N HTTP calls for N items. The trade-off: the cart may show a stale price if a seller changes the price later. Order-service fetches the live price from product-service at order creation to reconcile any difference.
 
-Note: the frontend also fetches product images for cart display. These are NOT stored in Redis — the image is fetched from product-service by the browser when rendering the cart page. This separation keeps the cart's Redis payload small (just name, quantity, price, sellerId) and lets the product image cache (30-min TTL in Redis on the product-service side) do its job independently.
+Note: the frontend also fetches product images for cart display. These are NOT stored in Redis — the image is fetched from product-service by the browser when rendering the cart page. This separation keeps the cart's Redis payload small (just product_name, quantity, unit_price) and lets the product image cache (30-min TTL in Redis on the product-service side) do its job independently.
 
 ### Q: What happens if the background sync goroutine crashes?
 

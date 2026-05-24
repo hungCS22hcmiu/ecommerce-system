@@ -8,7 +8,7 @@ cart-service uses a **Redis-first** architecture: all reads and writes go to Red
 
 **Concurrency:** mutations use Redis `WATCH / MULTI / EXEC` (optimistic locking). Up to 3 retries are attempted on conflict before returning `409 Conflict` to the caller.
 
-**Resilience:** calls to product-service go through a three-state circuit breaker (CLOSED → OPEN → HALF-OPEN). Read-only cart operations (get, update, remove, clear) bypass the product client entirely and continue working even when the circuit is open.
+**Resilience:** calls to product-service go through a three-state circuit breaker (CLOSED → OPEN → HALF-OPEN). A Redis-backed product-validation cache (5s TTL, key `product:v:{id}`) short-circuits the network call entirely on cache hit — bypassing the breaker check as well. Read-only cart operations (get, update, remove, clear) bypass the product client entirely and continue working even when the circuit is open.
 
 ## Tech Stack
 
@@ -28,16 +28,20 @@ cart-service uses a **Redis-first** architecture: all reads and writes go to Red
                 ┌──────────────────────────────────┐
                 │          cart-service             │
                 │                                  │
-  Client ──────▶│  Handler → Service → RedisRepo   │──▶ Redis
-                │                ↓                 │
+  Client ──────▶│  Handler → Service → RedisRepo   │──▶ Redis (cart:* hashes)
+                │                ↓                 │──▶ Redis (product:v:* cache, 5s TTL)
                 │         ProductClient            │──▶ product-service
-                │          (+ CircuitBreaker)      │
+                │     (cache → CB → retry)         │
                 │                                  │
                 │     Background SyncWorker (30s)  │──▶ PostgreSQL
                 └──────────────────────────────────┘
 ```
 
-**Redis key format:** `cart:{userID}` — a Hash where each field is a `productId` (string) and the value is a JSON-encoded `CartItemValue` (`product_name`, `quantity`, `unit_price`). TTL: 7 days, refreshed on every write.
+**Middleware chain:** `Recovery → Correlation → Logger` (global); `Auth(JWT)` applied to the `/api/v1/cart` route group only.
+
+**Redis key formats:**
+- `cart:{userID}` — Hash, each field is a `productId` (string), value is JSON `CartItemValue` (`product_name`, `quantity`, `unit_price`). TTL: 7 days, refreshed on every write.
+- `product:v:{productID}` — String, JSON `ProductInfo`. TTL: 5 seconds. Used by the product client to skip the circuit breaker on repeated `AddItem` calls for the same product.
 
 ## API
 
@@ -146,13 +150,14 @@ Integration tests spin up a real Redis DB (index 1) and hit the actual Postgres 
 
 | Package | Tests | Type |
 |---|---|---|
-| `internal/service` | 9 unit tests | Mock repos + product client |
-| `internal/handler` | Handler-level tests | `httptest` |
-| `internal/integration` | 9 integration tests | Real Redis + Postgres |
+| `internal/service` | 12 unit tests | Mock repos + product client |
+| `internal/handler` | 16 handler tests | `httptest` |
+| `internal/integration` | 10 integration tests | Real Redis + Postgres |
 
 Notable integration tests:
 - `TestConcurrentAdd_Integration` — 10 goroutines add the same product simultaneously; asserts exactly 1 Redis field remains (no lost updates)
 - `TestRedisToPostgresSync_Integration` — verifies the background sync worker correctly flushes Redis → Postgres
+- `TestCartTTL_Integration` — verifies the 7-day TTL is refreshed on every write
 - `TestDegradedMode_CircuitOpen_ReadOpsStillWork` — opens the circuit breaker, then proves get/update/remove/clear still work
 
 ## Key Files
@@ -161,13 +166,14 @@ Notable integration tests:
 cmd/server/main.go                    # wiring: DB, Redis, router, sync worker, graceful shutdown
 config/config.go                      # env-based configuration
 internal/handler/cart_handler.go      # HTTP layer, error mapping
-internal/service/cart_service.go      # business logic, AddItem calls product-service
+internal/service/cart_service.go      # business logic: product validation, stock/seller checks, Redis writes
 internal/repository/redis_cart_repository.go  # WATCH/MULTI/EXEC, TTL management
 internal/repository/cart_repository.go        # Postgres upsert + replace
 internal/cache/sync.go                # background worker: Redis → Postgres flush every 30s
-internal/client/product_client.go     # HTTP client with retry (3 attempts) + circuit breaker
+internal/client/product_client.go     # HTTP client: 5s Redis cache → circuit breaker → retry (3 attempts)
 internal/client/circuit_breaker.go    # three-state circuit breaker (threshold=5, timeout=30s)
-internal/middleware/auth.go           # RS256 JWT validation, sets userID in Gin context
+internal/middleware/auth.go           # RS256 JWT validation, sets userID + role in Gin context
+internal/middleware/correlation.go    # reads/generates X-Correlation-ID, forwards via request context
 migrations/                           # golang-migrate SQL files
 ```
 

@@ -52,10 +52,12 @@ order-service                  Kafka                    payment-service         
 
 3. **Deserialize** — If `json.Unmarshal` fails the message is a poison pill; it goes straight to `payments.dlq` with `errorStage: "deserialize"`, then the offset is committed (no redelivery of a permanently broken message).
 
-4. **ProcessPayment** (idempotency dedup):
+4. **ProcessPayment** (idempotency dedup + PENDING-resume):
    - Build a `Payment` row with `Status=PENDING` and `IdempotencyKey=OrderID`.
    - `repo.Create` wraps insert + initial `payment_history` row in one transaction.
-   - Postgres `UNIQUE` on `idempotency_key` fires → `ErrDuplicateIdempotencyKey` → return the existing row. The saga delivers the same outcome without a second charge.
+   - Postgres `UNIQUE` on `idempotency_key` fires → `ErrDuplicateIdempotencyKey` → fetch the existing row.
+     - If existing status is **terminal** (`COMPLETED` or `FAILED`): return immediately — idempotent re-delivery with no second charge.
+     - If existing status is **PENDING**: the service was killed after inserting the row but before the gateway call completed. Set `p = existing` and continue to the charge step, using the same payment ID as a gateway-level idempotency key so the provider doesn't charge twice.
 
 5. **Charge** — `gateway.Charge` is called with a 5-second timeout. The mock gateway simulates 90% success with random latency.
    - `ErrGatewayDeclined` → `UpdateStatus → FAILED` → no retry (permanent decline).
@@ -65,7 +67,9 @@ order-service                  Kafka                    payment-service         
 
 7. **Publish outcome** — Worker calls `producer.PublishCompleted` or `PublishFailed`. Message is keyed by `orderId` (partition ordering) and carries `__TypeId__` header so Spring Kafka's `JsonDeserializer` resolves the target class without config changes on order-service.
 
-8. **Commit offset** — Only after successful outcome publish. If publish fails, the payment row is persisted (idempotency handles a retry), so offset is still committed to avoid redelivery.
+8. **Commit offset** — Only after a successful `publishOutcome`. If `publishOutcome` fails:
+   - Payment still **PENDING** (gateway call never completed) → offset is **not committed**, forcing Kafka redelivery so the charge is retried.
+   - Payment **terminal** (COMPLETED/FAILED) but Kafka write failed → offset **is committed** anyway, because re-delivery will hit the idempotency key and return the same terminal row. The trade-off: order-service may never get the outcome event, but the payment itself is safe.
 
 ### Shutdown Sequence
 
@@ -91,7 +95,12 @@ SIGTERM
 │                                                             │
 │  HTTP (Gin :8003)          Kafka Consumer                   │
 │  ┌──────────────────┐      ┌────────────────────────┐       │
-│  │ PaymentHandler   │      │ Consumer                │       │
+│  │ Recovery →        │      │ Consumer                │       │
+│  │ Correlation →     │      │                        │       │
+│  │ Logger            │      │                        │       │
+│  │ (Auth per route)  │      │                        │       │
+│  ├──────────────────┤      │                        │       │
+│  │ PaymentHandler   │      │                        │       │
 │  │  POST /payments  │      │  reader (orders.created)│       │
 │  │  GET  /payments  │      │  jobs chan (cap 100)     │       │
 │  │  GET  /:id       │      │  5 × runWorker          │       │
@@ -287,7 +296,7 @@ Choreography is appropriate here because there are only 2 services in the saga. 
 
 ### Q: What happens if `payments.completed` publish fails after the payment is persisted?
 
-**A:** The offset is still committed (line 214 in `consumer.go`). The rationale: the payment row is in Postgres with `COMPLETED` status. If we don't commit, Kafka redelivers, `idempotency_key` dedup returns the same `COMPLETED` row, and we retry the publish — which is fine. Committing even on publish failure avoids that retry at the cost of order-service never getting the `payments.completed` event. In a production system you'd want an outbox pattern or at least a reconciliation job to detect `COMPLETED` payments with no corresponding order transition.
+**A:** It depends on the payment's status. If the payment is **terminal** (COMPLETED or FAILED), the offset is committed anyway — re-delivery would hit the idempotency key and return the same terminal row, giving another publish attempt without a second charge, but that's not guaranteed to succeed either. Committing avoids an infinite retry loop at the cost of order-service potentially never seeing the outcome event. If the payment is still **PENDING** (the gateway call itself was never completed), the offset is NOT committed — Kafka redelivers and `ProcessPayment` re-attempts the gateway using the same payment ID. In production you'd add an outbox pattern or reconciliation job to catch COMPLETED payments with no corresponding order transition.
 
 ### Q: Why is `StartOffset=earliest` set on the consumer?
 

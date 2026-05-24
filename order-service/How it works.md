@@ -9,15 +9,18 @@ The `order-service` is a Java/Spring Boot microservice that manages the **order 
 **Analogy:** Think of it as a bank teller processing a withdrawal. The teller (order-service) receives your request, locks your account record (pessimistic lock), validates the state of your account (state machine), updates the balance (reserves stock), and records every step in a ledger (status history). If two tellers try to process the same account simultaneously, only one gets the lock — the second waits or fails. There's no "maybe both succeed" — correctness is non-negotiable. Beyond the transaction itself, the teller also sends messages: a notification to the warehouse when a new order arrives, a receipt to the customer when payment clears, and an alert to the shop owner when a customer leaves a product review.
 
 **Responsibilities:**
-- Create orders with parallel stock reservation across multiple products (with compensation on partial failure)
+- Create orders with parallel stock reservation across multiple products (synchronized tracking, compensation on any failure)
+- Validate all items are from the **same seller** at create time — mixed-seller orders are rejected with full stock compensation
 - Enforce a strict state machine: `PENDING → CONFIRMED/CANCELLED → SHIPPED → DELIVERED`
 - Pessimistic row-level locking on all state transitions — concurrent transitions are serialized, never duplicated
-- Publish `orders.created` Kafka events to trigger the payment saga
-- Consume `payments.completed` / `payments.failed` Kafka events to advance or roll back order state
+- **Transactional outbox**: `OutboxEvent` written atomically with the order; `OutboxPublisher` polls every 100ms (`FOR UPDATE SKIP LOCKED`) and publishes to Kafka — decouples order creation from Kafka availability
+- Consume `payments.completed` / `payments.failed` Kafka events to advance (`CONFIRMED`) or cancel the order
+- `releaseStockForOrder` runs `@Async` on payment failure — Kafka consumer thread returns immediately
 - Append-only `order_status_history` for a complete audit trail of every transition
-- In-app notifications for buyers (payment outcome) and sellers (new order, new review)
+- In-app notifications: seller on new order + cancellation + payment confirmed; buyer on shipment; seller on review (via internal endpoint)
+- `purchase-verification` endpoint — product-service calls this synchronously before accepting a review to confirm the user actually bought the product at DELIVERED status
 - Seller order view: paginated order list scoped to a seller ID, filterable by status
-- Internal review notification endpoint — called fire-and-forget by product-service after a customer posts a review
+- Internal review notification endpoint — blocked at nginx externally; only reachable from product-service within Docker network
 
 ---
 
@@ -41,73 +44,118 @@ The `order-service` is a Java/Spring Boot microservice that manages the **order 
 
 ### Create Order (the critical path)
 ```
-POST /api/v1/orders  Authorization: Bearer <JWT>
-    body:{cartId, items[], shippingAddress}
+POST /api/v1/orders  (X-User-Id: <UUID> header — set by Nginx after JWT validation)
+    body:{cartId, sellerId, totalAmount, items[], shippingAddress}
     │
-    ├─ Parse + @Valid validate CreateOrderRequest
+    ├─ 1. Parallel stock reservation (CompletableFuture.supplyAsync per item):
+    │        reserveStock(productId, quantity, "order-{userId}")
+    │          └─ POST product-service:8081/api/v1/inventory/{id}/reserve
+    │        Tracks successfully reserved IDs in synchronized(reservedProductIds)
+    │        CompletableFuture.allOf(...).join()  ← waits for ALL
+    │        Any failure → compensate:
+    │          For each reservedProductId: releaseStock(...)
+    │          Re-throw original exception
     │
-    ├─ Parallel stock reservation (CompletableFuture per item):
-    │     For each item in items[]:
-    │       productServiceClient.reserveStock(productId, quantity, "order-{userId}")
-    │         └─ POST product-service:8081/api/v1/inventory/{id}/reserve
-    │     All futures joined: if ANY fails → compensation
-    │       For each successfully reserved item: releaseStock(...)
-    │       Throw InsufficientStockException → 409
+    ├─ 2. Fetch live product details + validate same seller:
+    │        For each item: productServiceClient.getProduct(productId)
+    │          → snapshot productName, unitPrice from product-service
+    │          → validate productSellerId matches across all items
+    │             Mismatch → release ALL stock → throw IllegalArgumentException
+    │        Compute totalAmount = Σ (product.price × quantity)
     │
-    ├─ Fetch product details (name, price) for each item:
-    │     productServiceClient.getProduct(productId)
+    ├─ 3. Persist Order (status=PENDING) + OrderItems + initial StatusHistory
+    │        oldStatus=null, newStatus=PENDING, reason="Order created"
     │
-    ├─ Persist Order (status=PENDING) + OrderItems + initial OrderStatusHistory row
+    ├─ 4. Write OutboxEvent to orders_outbox (SAME TRANSACTION — atomic with order save)
+    │        payload = OrderCreatedEvent{orderId, userId, totalAmount, items[]}
+    │        headers = {"X-Correlation-ID": correlationId}
+    │        ← OutboxPublisher polls every 100ms with FOR UPDATE SKIP LOCKED
+    │          and publishes to topic: orders.created (partition key = orderId)
     │
-    ├─ Publish Kafka event:
-    │     orderEventProducer.publishOrderCreated(OrderCreatedEvent{
-    │       orderId, userId, totalAmount, items[], idempotencyKey, timestamp
-    │     })
-    │     → topic: orders.created (partition key = userId)
-    │
-    ├─ notificationService.notifySeller(sellerId, orderId, "New order", "...")
-    │     └─ Persist Notification{userId=sellerId, orderId=orderId, productId=null, isRead=false}
+    ├─ 5. notificationService.notifySeller(sellerId, orderId, "New order #...", "$total")
+    │        (wrapped in try-catch — failure is logged WARN, order still succeeds)
     │
     └─ Return OrderResponse (201)
 ```
 
-### State Transition (any status change)
+### State Transition — cancelOrder
 ```
-PUT /api/v1/orders/{id}/cancel  Authorization: Bearer <JWT>
+PUT /api/v1/orders/{id}/cancel  (X-User-Id header)
     │
-    ├─ orderRepository.findByIdWithLock(orderId)
-    │     └─ SELECT * FROM orders WHERE id=? FOR UPDATE
-    │        ← row is locked; concurrent requests wait here
-    │
-    ├─ Ownership check: order.userId == userId → else 403
-    ├─ stateMachine.validateTransition(current, CANCELLED)
-    │     └─ PENDING → CANCELLED: ✓
-    │        SHIPPED  → CANCELLED: ✗ throws InvalidOrderStateException → 422
+    ├─ findById → ownership check (order.userId == userId → else 403)
+    ├─ updateOrderStatus(orderId, CANCELLED, "User requested cancellation", userId)
+    │     └─ findByIdWithLock(orderId)
+    │          └─ SELECT * FROM orders WHERE id=? FOR UPDATE
+    │             ← row is locked; concurrent requests queue here
+    │        stateMachine.validateTransition(current, CANCELLED)
+    │          PENDING → CANCELLED ✓ | SHIPPED → CANCELLED ✗ → InvalidOrderStateException → 409
+    │        order.status = CANCELLED
+    │        orderRepository.save(order)
+    │        historyRepository.save(old→new, reason, changedBy)
     │
     ├─ For each item: productServiceClient.releaseStock(productId, qty, orderId)
+    │     (each wrapped in try-catch — release failures are logged, not thrown)
     │
-    ├─ order.status = CANCELLED
-    ├─ orderStatusHistoryRepository.save(history row: PENDING→CANCELLED, reason, timestamp)
-    ├─ orderRepository.save(order)
+    ├─ notificationService.notifySeller(sellerId, orderId, "Order cancelled by customer", ...)
+    │     (wrapped in try-catch — logged WARN on failure)
+    │
     └─ Return OrderResponse
+```
+
+### State Transition — updateOrderStatus (shared by all transitions)
+```
+updateOrderStatus(orderId, newStatus, reason, changedBy)
+    │
+    ├─ orderRepository.findByIdWithLock(orderId) → FOR UPDATE
+    ├─ stateMachine.validateTransition(oldStatus, newStatus)
+    ├─ order.setStatus(newStatus)
+    ├─ orderRepository.save(order)
+    └─ historyRepository.save(orderId, oldStatus, newStatus, reason, changedBy)
 ```
 
 ### Kafka: Payment Event Consumer
 ```
 Topic: payments.completed  (consumer group: order-service)
     │
-    └─ PaymentEventConsumer.handlePaymentCompleted(event)
-          ├─ orderService.updateOrderStatus(event.orderId, CONFIRMED, "payment succeeded")
-          │     └─ findByIdWithLock → validate → save + record history
-          └─ notificationService.notifyBuyer(order.userId, order.id, "Payment confirmed", "...")
-                └─ Persist Notification{userId=buyerId, orderId=orderId, productId=null}
+    └─ PaymentEventConsumer.onPaymentCompleted(record)
+          ├─ MDC.put("correlationId", extractCorrelationId(record))  ← from Kafka header
+          ├─ orderService.updateOrderStatus(orderId, CONFIRMED, "Payment completed", "payment-service")
+          │     └─ findByIdWithLock → stateMachine.validate → save + record history
+          └─ notificationService.notifySeller(order.sellerId, orderId,
+                  "Payment confirmed — ready to ship", "Order #... has been paid")
+             (notifies SELLER, not buyer — seller needs to act by shipping)
 
-Topic: payments.failed
+Topic: payments.failed  (consumer group: order-service)
     │
-    └─ PaymentEventConsumer.handlePaymentFailed(event)
-          ├─ For each item: releaseStock(...)
-          ├─ orderService.updateOrderStatus(event.orderId, CANCELLED, "payment failed")
-          └─ notificationService.notifyBuyer(order.userId, order.id, "Payment failed", "...")
+    └─ PaymentEventConsumer.onPaymentFailed(record)
+          ├─ orderService.updateOrderStatus(orderId, CANCELLED, "Payment failed: {reason}", "payment-service")
+          └─ orderService.releaseStockForOrder(orderId)  ← @Async("taskExecutor")
+                └─ For each item: releaseStock(productId, qty, orderId.toString())
+                   (each wrapped in try-catch; Kafka consumer thread returns immediately)
+             (NO buyer notification — payment-service sends its own failure notification)
+```
+
+### Purchase Verification (called by product-service before allowing a review)
+```
+GET /api/v1/orders/purchase-verification?productId=&orderItemId=
+    header: X-User-Id: {customerId}
+    │
+    └─ orderItemRepository.findVerifiedDeliveredItem(orderItemId, userId, productId)
+          └─ SELECT oi FROM OrderItem oi JOIN oi.order o
+               WHERE oi.id = :itemId AND o.userId = :userId
+                 AND o.status = 'DELIVERED' AND oi.productId = :productId
+             Present → { verified: true }  |  Empty → { verified: false }
+    ← product-service maps false → PurchaseNotVerifiedException → 403
+```
+
+### Ship Order (seller action — internal only)
+```
+PUT /api/v1/orders/{id}/ship  (X-User-Id: sellerId — nginx blocks external)
+    │
+    ├─ findByIdWithLock → seller ownership check (order.sellerId == sellerId)
+    ├─ updateOrderStatus(orderId, SHIPPED, "Shipped by seller", sellerId)
+    └─ notificationService.notifyBuyer(order.userId, orderId,
+              "Your order has been shipped", "Order #... is on its way.")
 ```
 
 ### Internal Review Notification (from product-service)
@@ -146,13 +194,27 @@ Seller clicks notification (new order):
 
 ### Seller Order List
 ```
-GET /api/v1/orders?sellerId=<UUID>&status=CONFIRMED&page=0&size=20
+GET /api/v1/orders/seller[?status=CONFIRMED]&page=0&size=20  (X-User-Id: sellerId)
     │
-    ├─ sellerId != null → orderRepository.findBySellerIdAndStatus(sellerId, CONFIRMED, pageable)
-    │     └─ SELECT * FROM orders WHERE seller_id=? AND status=? ORDER BY created_at DESC
-    │        ← VARCHAR(50) status; Hibernate binds as String → no enum cast error
+    ├─ status set → findBySellerIdAndStatusOrderByCreatedAtDesc(sellerId, status, pageable)
+    ├─ status null → findBySellerIdOrderByCreatedAtDesc(sellerId, pageable)
+    │     └─ VARCHAR(50) status; Hibernate binds as String → no enum cast error
     │
     └─ Return Page<OrderSummaryResponse>
+
+GET /api/v1/orders/seller/{id}  ← get single order detail as seller (ownership check)
+```
+
+### Notifications API
+```
+GET /api/v1/orders/notifications  (X-User-Id header)
+    └─ Returns NotificationSummaryResponse{
+             unreadCount: long,          ← count of unread
+             items: top 20 notifications ordered newest first
+           }
+
+PUT /api/v1/orders/notifications/mark-read  (X-User-Id header)
+    └─ Marks ALL notifications read for the user (bulk update)
 ```
 
 ---
@@ -163,19 +225,21 @@ GET /api/v1/orders?sellerId=<UUID>&status=CONFIRMED&page=0&size=20
                 ┌────────────────────────────────────────────────────────────────────┐
                 │                          order-service                               │
                 │                                                                     │
-HTTP ───────────┤  OrderController (orders + notifications + internal review)         │
-(Bearer JWT)    │      │                                                              │
+HTTP ───────────┤  CorrelationFilter (X-Correlation-ID → MDC)                        │
+(X-User-Id      │  OrderController (orders + seller view + notifications + internal)  │
+ set by Nginx)  │      │                                                              │
                 │  OrderServiceImpl ◄──── OrderStateMachine                         │
-                │      │                       (validates transitions)               │
+                │      │                       (VALID_TRANSITIONS map)              │
                 │      ├── OrderRepository (findByIdWithLock — FOR UPDATE)           │
-                │      │   OrderRepository (findBySellerIdAndStatus — seller view)   │
-                │      ├── OrderItemRepository                                        │
+                │      ├── OutboxEventRepository  ← written atomically with order    │
+                │      ├── OrderItemRepository (findVerifiedDeliveredItem)            │
                 │      ├── OrderStatusHistoryRepository                              │
-                │      ├── NotificationService ──────────────────────────────────►  │
-                │      │   (notifySeller / notifyBuyer / notifySellerReview)         │
-                │      ├── ProductServiceClient (RestTemplate)                       │
-                │      └── OrderEventProducer ──────────────────────────────────►   │
-                │                                                        Kafka        │
+                │      ├── NotificationService (seller/buyer/review)                 │
+                │      └── ProductServiceClient (reserve/release/getProduct)         │
+                │                                                                     │
+                │  OutboxPublisher (@Scheduled 100ms) ──────────────────────────►   │
+                │      FOR UPDATE SKIP LOCKED → publish → mark published_at   Kafka  │
+                │  OutboxPublisher.reapStuckPendingOrders (@Scheduled 60s)           │
                 │  PaymentEventConsumer ◄────────────────────────────────────────    │
                 └──────────────────────────────────────────────────────────────────  ┘
                          │                              │
@@ -187,6 +251,8 @@ HTTP ───────────┤  OrderController (orders + notificatio
           │ order_status_history      │     │ GET  /products/{id}        │
           │ notifications             │     └────────────────────────────┘
           │   (orderId|productId)     │
+          │ orders_outbox             │
+          │   (published_at NULL=new) │
           └───────────────────────────┘
 ```
 
@@ -207,11 +273,13 @@ HTTP ───────────┤  OrderController (orders + notificatio
               CANCELLED     CANCELLED
 ```
 
-Valid transitions:
-- `PENDING → CONFIRMED` (payment succeeded) or `PENDING → CANCELLED` (payment failed / user cancels)
-- `CONFIRMED → SHIPPED` (seller ships) or `CONFIRMED → CANCELLED` (exceptional)
-- `SHIPPED → DELIVERED` (delivery confirmed)
-- `DELIVERED` and `CANCELLED` are terminal — no further transitions allowed
+Valid transitions (defined in `OrderStateMachine.VALID_TRANSITIONS` map):
+- `PENDING → CONFIRMED` (payment succeeded via Kafka) or `PENDING → CANCELLED` (payment failed / user cancels)
+- `CONFIRMED → SHIPPED` (seller ships — internal only) or `CONFIRMED → CANCELLED` (exceptional)
+- `SHIPPED → DELIVERED` (delivery confirmed — internal only)
+- `DELIVERED` and `CANCELLED` are terminal — no transitions out; `validateTransition` throws `InvalidOrderStateException → 409`
+
+Note: there is **no** `PAYMENT_FAILED` status. Payment failures transition to `CANCELLED`.
 
 ### Data model
 
@@ -332,6 +400,21 @@ private void persist(UUID userId, UUID orderId, Long productId, String title, St
 }
 ```
 
+### Purchase verification — gating review creation
+
+```java
+// OrderItemRepository.java
+@Query("""
+    SELECT oi FROM OrderItem oi JOIN oi.order o
+    WHERE oi.id = :itemId AND o.userId = :userId
+      AND o.status = 'DELIVERED' AND oi.productId = :productId
+    """)
+Optional<OrderItem> findVerifiedDeliveredItem(UUID itemId, UUID userId, Long productId);
+// product-service calls GET /purchase-verification?productId=&orderItemId=
+// with X-User-Id header. Returns { verified: true/false }.
+// Three conditions must ALL hold: correct item ID, correct user, order DELIVERED.
+```
+
 ### Internal review notification endpoint (nginx-blocked externally)
 
 ```java
@@ -349,36 +432,63 @@ public ApiResponse<Void> createReviewNotification(@RequestBody ReviewNotificatio
 
 ```java
 // OrderServiceImpl.java
-List<CompletableFuture<Void>> reservations = items.stream()
-    .map(item -> CompletableFuture.runAsync(() ->
-        productServiceClient.reserveStock(item.getProductId(), item.getQuantity(), referenceId)))
-    .toList();
+List<Long> reservedProductIds = new ArrayList<>();
 
-List<OrderItemRequest> reserved = new ArrayList<>();
+List<CompletableFuture<ProductServiceClient.StockResponse>> futures = items.stream()
+    .map(item -> CompletableFuture.supplyAsync(() -> {
+        ProductServiceClient.StockResponse resp = productServiceClient.reserveStock(
+                item.getProductId(), item.getQuantity(), "order-" + userId);
+        synchronized (reservedProductIds) {
+            reservedProductIds.add(item.getProductId()); // track which succeeded
+        }
+        return resp;
+    }))
+    .collect(Collectors.toList());
+
 try {
-    for (int i = 0; i < reservations.size(); i++) {
-        reservations.get(i).join();
-        reserved.add(items.get(i));
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+} catch (Exception e) {
+    // Compensate: release only the items that were successfully reserved
+    for (Long productId : reservedProductIds) {
+        items.stream().filter(i -> i.getProductId().equals(productId)).findFirst()
+             .ifPresent(i -> productServiceClient.releaseStock(
+                     productId, i.getQuantity(), "order-" + userId));
     }
-} catch (CompletionException e) {
-    reserved.forEach(item ->
-        productServiceClient.releaseStock(item.getProductId(), item.getQuantity(), referenceId));
-    throw new InsufficientStockException("Stock reservation failed: " + e.getMessage());
+    throw ...; // re-throw original exception
 }
 ```
 
-### Kafka event publishing
+### Transactional outbox — write + publish separation
 
 ```java
-// OrderEventProducer.java
-public void publishOrderCreated(OrderCreatedEvent event) {
-    ProducerRecord<String, OrderCreatedEvent> record =
-        new ProducerRecord<>("orders.created", event.getUserId().toString(), event);
-    kafkaTemplate.send(record)
-        .whenComplete((result, ex) -> {
-            if (ex != null) log.error("Failed to publish order.created for {}", event.getOrderId(), ex);
-        });
+// OrderServiceImpl.java — createOrder() step 4: write outbox IN SAME TRANSACTION as order
+outboxEventRepository.save(OutboxEvent.builder()
+        .orderId(saved.getId())
+        .payload(objectMapper.writeValueAsString(event))
+        .headers(objectMapper.writeValueAsString(Map.of("X-Correlation-ID", correlationId)))
+        .createdAt(OffsetDateTime.now())
+        .build());
+// If this TX rolls back, the outbox row is also rolled back — no phantom Kafka event.
+// OutboxPublisher polls every 100ms and publishes independently.
+
+// OutboxPublisher.java — runs every 100ms, separate TX
+@Scheduled(fixedDelay = 100)
+@Transactional
+public void publishPending() {
+    List<OutboxEvent> batch = outboxRepo.findUnpublishedForUpdate();
+    // findUnpublishedForUpdate: SELECT ... WHERE published_at IS NULL FOR UPDATE SKIP LOCKED
+    // SKIP LOCKED ensures multiple instances don't publish the same row
+    for (OutboxEvent ev : batch) {
+        ProducerRecord<String, Object> record = new ProducerRecord<>(
+                "orders.created", ev.getOrderId().toString(), event);
+        kafkaTemplate.send(record).get(5, TimeUnit.SECONDS); // synchronous send
+        ev.setPublishedAt(OffsetDateTime.now());
+        outboxRepo.save(ev);
+    }
 }
+
+// Reaper (every 60s): re-queues PENDING orders > 2min old with no unpublished outbox row
+// (handles the case where the OutboxPublisher published but crashed before marking published_at)
 ```
 
 ---
@@ -469,6 +579,10 @@ The `@Enumerated(EnumType.STRING)` annotation on the Java entity still enforces 
 
 **A:** nginx has an exact-match location block: `location = /api/v1/orders/notifications/internal/review { return 403; }`. All external traffic hitting this path gets a 403 before it reaches order-service. Requests from within the Docker network (product-service calling order-service by service name) bypass nginx entirely — they hit order-service directly at port 8082. This pattern (expose internally, block externally at the gateway) is standard in microservice architectures where service-to-service trust is enforced by network topology, not application-level auth.
 
+### Q: Why use a transactional outbox instead of publishing directly to Kafka from createOrder?
+
+**A:** Direct Kafka publish in the same transaction doesn't work — Kafka isn't part of the same 2PC boundary as Postgres. If `createOrder()` committed the Postgres row but then crashed before publishing to Kafka, the order would exist in PENDING forever with no payment event ever triggered. The transactional outbox solves this: the `OutboxEvent` row is written in the same `@Transactional` as the order insert, so they commit together. A background poller then publishes from the DB to Kafka with retries. The only failure modes are (a) the poller crashes after sending but before marking `published_at` — in which case the event is re-sent (at-least-once, Kafka handles this idempotently) or (b) the order is stuck PENDING, which the reaper job detects after 2 minutes and re-queues.
+
 ### Q: What happens if the Kafka consumer crashes between consuming an event and committing the offset?
 
-**A:** Kafka's at-least-once delivery means the event will be redelivered. The consumer will process `payments.completed` again for an order already in CONFIRMED state. The state machine `validateTransition(CONFIRMED, CONFIRMED)` returns an error — but we handle this idempotently: if the target state already equals the current state, we treat it as a no-op and commit the offset. Without this idempotency guard, a redelivered event would surface as a 422, the consumer would retry, and the message might end up in the DLQ incorrectly.
+**A:** Kafka's at-least-once delivery means the event will be redelivered. The consumer will process `payments.completed` again for an order already in CONFIRMED state. `stateMachine.validateTransition(CONFIRMED, CONFIRMED)` throws `InvalidOrderStateException` — but the consumer catches all exceptions and logs them, so the offset is still committed and the message is not re-delivered indefinitely. The seller notification call is idempotent at the notification level (a duplicate notification is annoying but not harmful). Without this exception handling, a redelivered event would cause the consumer to crash-loop and the message would eventually end up in the DLQ.

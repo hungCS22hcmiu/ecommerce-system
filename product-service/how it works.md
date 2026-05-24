@@ -15,9 +15,10 @@ The `product-service` is a Java/Spring Boot microservice that owns the **product
 - Write-through async embedding on every product create/update
 - Redis cache-aside: 30-min per-product TTL, 3-min paginated list TTL, 1-min AI search TTL
 - Async cache warmup on startup — top 100 active products pre-loaded before traffic arrives
-- Optimistic-locking inventory with `@Version` + `@Retryable` (3 attempts, 100ms backoff)
-- Append-only `stock_movements` audit trail for every reserve/release
-- Reviews: create (one per order item), update, delete; recalculates `avg_rating` + `rating_count` synchronously
+- Conditional native UPDATE for inventory (single atomic SQL, no `@Version` retry loop — reads are never blocked)
+- `StockProjection` interface used after stock mutations to read new levels without loading a managed entity (prevents spurious `@Version` increment under concurrent load)
+- Append-only `stock_movements` audit trail for every reserve/release; cache-evicts the product entry on each mutation
+- Reviews: purchase verification against order-service (synchronous, blocking) before saving; duplicate enforced via DB `UNIQUE` + `DataIntegrityViolationException`; recalculates `avg_rating` + `rating_count` synchronously and evicts both `product` and `productList` caches
 - Fire-and-forget review notification to order-service (seller receives in-app alert on new review)
 - Public seller shop endpoint — paginated ACTIVE product listing scoped to one seller
 
@@ -74,56 +75,80 @@ GET /api/v1/products/{id}
 
 ### AI Semantic Search
 ```
-GET /api/v1/products/ai-search?q=comfortable+shoes&limit=10
+GET /api/v1/products/ai-search?q=comfortable+shoes&limit=10[&categoryId=5][&sellerId=<UUID>]
     │
-    ├─ @Cacheable("aiSearch") key={q, limit}  ← 1-min TTL
+    ├─ @Cacheable("aiSearch") key={q, limit, categoryId, sellerId}  ← 1-min TTL
+    │     unless = result.results().isEmpty()  ← never cache empty (async embedding lag)
     │     ├─ Cache HIT → return cached AISearchResponse
     │     └─ Cache MISS
     │           ├─ embeddingClient.embed(q)
     │           │     └─ POST ai-service:8000/embed → float[384]
     │           │        On failure → throw AIServiceException (cache write skipped)
     │           ├─ SET LOCAL ivfflat.probes = 10  ← improves recall at slight latency cost
-    │           ├─ productRepository.findIdsBySemanticSimilarity(vectorLiteral, limit)
-    │           │     └─ SELECT id, 1 - (embedding <=> ?) AS score
-    │           │          FROM products WHERE status='ACTIVE'
-    │           │          ORDER BY embedding <=> ? LIMIT ?
-    │           ├─ productRepository.findAllById(ids) → load full entities in ID order
+    │           ├─ findIdsBySemanticSimilarity(vectorLiteral, categoryId, limit)
+    │           │     └─ (or findIdsBySemanticSimilarityBySeller if sellerId set)
+    │           │        SELECT id, 1-(embedding <=> CAST(:vec AS vector)) AS score
+    │           │        FROM products WHERE status='ACTIVE' [AND category_id=?] [AND seller_id=?]
+    │           │        ORDER BY embedding <=> CAST(:vec AS vector) LIMIT ?
+    │           ├─ productRepository.findAllById(ids) → load full entities
+    │           ├─ Re-rank: score = sim*0.75 + (avgRating/5)*0.15 + (stockReserved/max)*0.10
+    │           │     (similarity 75%, rating boost 15%, sales-popularity boost 10%)
     │           └─ Return AISearchResponse{query, results[], scores[], mode="ai"}
+    │              (latency logged: embed_ms / vector_ms / rerank_ms)
 ```
 
 ### Reserve Stock (the critical path)
 ```
 POST /api/v1/inventory/{productId}/reserve  body:{quantity, referenceId}
     │
-    ├─ @Retryable(ObjectOptimisticLockingFailureException, maxAttempts=3, delay=100ms)
+    ├─ @CacheEvict("product", productId) ← any stock change invalidates the cached product
     │
-    ├─ productRepository.findById(productId)       ← loads current @Version value
-    ├─ if stockQuantity - stockReserved < quantity → throw InsufficientStockException → 409
-    ├─ product.stockReserved += quantity
-    ├─ productRepository.save(product)
-    │     └─ Hibernate: UPDATE products SET stock_reserved=?, version=? WHERE id=? AND version=?
-    │           ├─ version matches → committed ✓
-    │           └─ version mismatch → ObjectOptimisticLockingFailureException
-    │                 └─ @Retryable → reload product fresh, retry (up to 3×)
+    ├─ productRepository.reserveStockConditional(productId, quantity)
+    │     └─ UPDATE products SET stock_reserved = stock_reserved + :qty
+    │          WHERE id = :id AND (stock_quantity - stock_reserved) >= :qty
+    │          (@Modifying clearAutomatically=true — subsequent reads see fresh DB state)
+    │          Returns 1 (success) or 0 (insufficient stock or product not found)
+    │
+    ├─ updated == 0:
+    │     ├─ findById → not found → ProductNotFoundException → 404
+    │     └─ available < qty → InsufficientStockException → 409
+    │        (StockContentionException is theoretically unreachable — safety belt only)
+    │
     ├─ stockMovementRepository.save(RESERVE movement)
-    └─ Return StockResponse{stockQuantity, stockReserved, availableStock}
+    │
+    ├─ productRepository.findStockById(productId) → StockProjection (read-only interface)
+    │     └─ SELECT stockQuantity, stockReserved FROM Product WHERE id=?
+    │        Loads only 2 fields — does NOT create a managed entity, so Hibernate
+    │        cannot trigger a dirty-check UPDATE or increment @Version
+    │
+    └─ Return StockResponse{productId, stockQuantity, stockReserved, availableStock}
 ```
 
-### Create Review (with seller notification)
+### Create Review (with purchase verification and seller notification)
 ```
 POST /api/v1/products/{productId}/reviews  Authorization: Bearer <JWT>
     body:{orderItemId, rating, comment?}
     │
-    ├─ Validate: product must be ACTIVE; rating 1–5
-    ├─ Check UNIQUE(userId, orderItemId) → 409 ALREADY_REVIEWED if exists
-    ├─ Verify orderItemId belongs to userId (order-service or product purchase check)
-    ├─ Persist Review{productId, userId, orderItemId, rating, comment}
+    ├─ Validate: product must be ACTIVE; filter(status == ACTIVE).orElseThrow()
+    │
+    ├─ orderServiceClient.verifyPurchase(customerId, productId, orderItemId)  ← BLOCKING call
+    │     └─ GET order-service:8082/api/v1/orders/purchase-verification?productId=&orderItemId=
+    │          header: X-User-Id: {customerId}
+    │        → false → throw PurchaseNotVerifiedException → 403
+    │        → exception → throw PurchaseVerificationException → 503
+    │
+    ├─ reviewRepository.save(review)
+    │     └─ UNIQUE(customer_id, order_item_id) violated → DataIntegrityViolationException
+    │           → caught → throw AlreadyReviewedException → 409
+    │        (duplicate enforced at DB level, not via a pre-check query)
     │
     ├─ recalculateAndEvict(product):
-    │     ├─ SELECT AVG(rating), COUNT(*) FROM reviews WHERE product_id=?
+    │     ├─ findAvgRating(productId) → SELECT AVG(rating) FROM reviews WHERE product_id=?
+    │     ├─ countByProductId(productId) → SELECT COUNT(*) FROM reviews WHERE product_id=?
     │     ├─ product.avgRating = avg; product.ratingCount = count
-    │     ├─ productRepository.save(product)        ← updates @Version too
-    │     └─ @CacheEvict("product", key=productId)  ← stale cache cleared
+    │     ├─ productRepository.save(product)
+    │     ├─ cacheManager.getCache("productList").clear()    ← all list pages stale
+    │     └─ cacheManager.getCache("product").evict(productId)  ← single product stale
     │
     ├─ orderServiceClient.notifySellerReview(sellerId, productId, title, body)
     │     └─ POST order-service:8082/api/v1/orders/notifications/internal/review
@@ -153,10 +178,15 @@ GET /api/v1/products?sellerId=<UUID>&ratedOnly=true&sort=avgRating,DESC
 ```
 ApplicationReadyEvent fires (after Spring context is fully ready)
     │
-    └─ @Async("taskExecutor") — runs in background thread pool, doesn't block startup
-          ├─ findTop100ByStatusOrderByUpdatedAtDesc(ACTIVE) — one DB query
-          └─ For each product: getProduct(id) → triggers @Cacheable → writes to Redis
-             Server accepts traffic immediately; top 100 products are warm within ~2 seconds
+    ├─ warmCache() — @Async("taskExecutor")
+    │     ├─ findTop100ByStatusOrderByUpdatedAtDesc(ACTIVE) — one DB query
+    │     └─ For each product: getProduct(id) → triggers @Cacheable → writes to Redis
+    │        Server accepts traffic immediately; top 100 products warm within ~2 seconds
+    │
+    └─ warmAI() — @Async("taskExecutor")
+          ├─ Runs 3 representative AI queries: "laptop", "shoes", "coffee maker"
+          └─ Each triggers @Cacheable("aiSearch") → warms pgvector planner + seeds Redis
+             (failures logged WARN and skipped — doesn't block startup)
 ```
 
 ---
@@ -198,13 +228,14 @@ ApplicationReadyEvent fires (after Spring context is fully ready)
 
 | Component | Role |
 |---|---|
-| `ProductServiceImpl` | CRUD, cache annotations, seller ownership checks, `ratedOnly` branching |
-| `InventoryServiceImpl` | Stock reserve/release with `@Retryable`; writes `StockMovement` in same TX |
-| `ReviewServiceImpl` | Create/update/delete reviews; recalculates `avgRating`/`ratingCount`; calls `OrderServiceClient` |
-| `ProductEmbeddingService` | `@Async` write-through: embeds on create/update; failures logged WARN |
-| `AISearchServiceImpl` | Query embed → pgvector → ranked results; cached 1min; skips cache on `AIServiceException` |
-| `OrderServiceClient` | Fire-and-forget HTTP to order-service; catches all exceptions; never rethrows |
-| `CacheWarmupService` | `@EventListener(ApplicationReadyEvent)` — warms Redis on startup |
+| `ProductServiceImpl` | CRUD, cache annotations (`@Cacheable`/`@CachePut`/`@CacheEvict`), seller ownership checks, `ratedOnly` branching, `getProduct(id, sellerId)` overload for seller-view |
+| `InventoryServiceImpl` | Conditional native UPDATE (no `@Retryable`); `StockProjection` read-back; evicts product cache on every mutation |
+| `ReviewServiceImpl` | Purchase verification (blocking); duplicate via `DataIntegrityViolationException`; recalculates ratings; evicts `product` + `productList`; fire-and-forget notify |
+| `ProductEmbeddingService` | `@Async` write-through: embeds on create; re-embeds on update only when name/description/category changes |
+| `AISearchServiceImpl` | Query embed → pgvector → re-rank (sim 75% + rating 15% + sales 10%); cached 1min; supports `categoryId` + `sellerId` filters |
+| `OrderServiceClient` | `verifyPurchase()` (blocking, throws on error); `notifySellerReview()` (fire-and-forget, logs WARN) |
+| `CacheWarmupService` | `@EventListener(ApplicationReadyEvent)` — `warmCache()` (top 100 products) + `warmAI()` (3 representative queries) |
+| `CorrelationFilter` | `OncePerRequestFilter` — reads/generates `X-Correlation-ID`; injects into MDC for structured logging |
 | `RedisConfig` | `RedisCacheManager` with per-cache TTLs, Jackson JSON serializer |
 | `GlobalExceptionHandler` | Maps all domain exceptions to `ApiResponse.error()` envelopes |
 
@@ -220,7 +251,7 @@ products
   stock_reserved  INT DEFAULT 0       ← availableStock = stock_quantity - stock_reserved
   avg_rating      DECIMAL(3,2)        ← denormalized; recalculated on every review mutation
   rating_count    INT DEFAULT 0       ← total reviews; ratedOnly filter uses > 0
-  version         INT DEFAULT 0       ← @Version field — optimistic lock vector
+  version         BIGINT DEFAULT 0    ← @Version field (Long in Java) — Hibernate optimistic lock; incremented by Hibernate on any entity save
   status          product_status      ← ACTIVE | INACTIVE | DELETED (soft delete)
   embedding       vector(384)         ← pgvector; IVFFLAT index (cosine, lists=100)
   search_vector   TSVECTOR            ← GIN-indexed for plainto_tsquery
@@ -260,32 +291,43 @@ product-service::aiSearch::...        ← composite: query + limit (1 min); neve
 
 ## 5. Code Examples
 
-### Optimistic locking — the version check in Hibernate
+### Conditional native UPDATE — atomic stock reservation
 
 ```java
 // InventoryServiceImpl.java
-@Retryable(
-    retryFor = ObjectOptimisticLockingFailureException.class,
-    maxAttempts = 3,
-    backoff = @Backoff(delay = 100)
-)
+@Override
 @Transactional
-public StockResponse reserveStock(Long productId, int qty, String referenceId) {
-    Product p = productRepository.findById(productId)
-        .orElseThrow(() -> new ProductNotFoundException(productId));
+@CacheEvict(value = "product", key = "#productId")
+public StockResponse reserveStock(Long productId, int quantity, String referenceId) {
+    // Single atomic SQL — no read-modify-write, no version check, no retry loop.
+    // The WHERE clause is the guard: both conditions must hold in the same atomic statement.
+    int updated = productRepository.reserveStockConditional(productId, quantity);
+    //   UPDATE products SET stock_reserved = stock_reserved + :qty
+    //   WHERE id = :id AND (stock_quantity - stock_reserved) >= :qty
+    //   Returns 1 on success, 0 on insufficient stock or missing product.
 
-    if (p.getStockQuantity() - p.getStockReserved() < qty) {
-        throw new InsufficientStockException(productId, qty);
+    if (updated == 0) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ProductNotFoundException(productId));
+        int available = product.getStockQuantity() - product.getStockReserved();
+        if (available < quantity) {
+            throw new InsufficientStockException(productId, quantity, available);
+        }
+        throw new StockContentionException(productId); // safety belt — theoretically unreachable
     }
 
-    p.setStockReserved(p.getStockReserved() + qty);
-    productRepository.save(p);
-    // Hibernate generates:
-    //   UPDATE products SET stock_reserved=5, version=6 WHERE id=42 AND version=5
-    // If another thread already committed version 6 → Hibernate throws OOLF → @Retryable
+    stockMovementRepository.save(StockMovement.builder()
+            .productId(productId).type(MovementType.RESERVE)
+            .quantity(quantity).referenceId(referenceId).build());
 
-    stockMovementRepository.save(StockMovement.of(productId, RESERVE, qty, referenceId));
-    return toStockResponse(p);
+    // Read back via StockProjection — NOT findById() — to avoid loading a managed entity.
+    // A full entity load in this writable @Transactional triggers Hibernate dirty-check,
+    // which increments @Version even though no app code changed the entity.
+    // Under concurrent load that causes spurious ObjectOptimisticLockingFailureException.
+    StockProjection sp = productRepository.findStockById(productId)
+            .orElseThrow(() -> new ProductNotFoundException(productId));
+    return new StockResponse(productId, sp.getStockQuantity(), sp.getStockReserved(),
+            sp.getStockQuantity() - sp.getStockReserved());
 }
 ```
 
@@ -298,16 +340,22 @@ public ReviewResponse createReview(Long productId, UUID userId, CreateReviewRequ
     Product product = productRepository.findById(productId)
         .orElseThrow(() -> new ProductNotFoundException(productId));
 
-    if (reviewRepository.existsByUserIdAndOrderItemId(userId, req.getOrderItemId())) {
-        throw new AlreadyReviewedException();
+    // verifyPurchase is a BLOCKING call — throws PurchaseVerificationException (503) on error
+    if (!orderServiceClient.verifyPurchase(customerId, productId, req.getOrderItemId())) {
+        throw new PurchaseNotVerifiedException(); // 403
     }
 
-    Review review = Review.builder()
-        .productId(productId).userId(userId).orderItemId(req.getOrderItemId())
+    ProductReview review = ProductReview.builder()
+        .product(product).customerId(customerId).orderItemId(req.getOrderItemId())
         .rating(req.getRating()).comment(req.getComment()).build();
-    reviewRepository.save(review);
+    try {
+        reviewRepository.save(review);
+    } catch (DataIntegrityViolationException e) {
+        // UNIQUE(customer_id, order_item_id) violated — duplicate review
+        throw new AlreadyReviewedException(); // 409
+    }
 
-    recalculateAndEvict(product);  // UPDATE avg_rating, rating_count + cache evict
+    recalculateAndEvict(product);  // UPDATE avg_rating, rating_count + evict both caches
 
     // Fire-and-forget: seller gets notified, but review creation never fails because of this
     String notifBody = req.getRating() + "/5 stars"
@@ -317,14 +365,17 @@ public ReviewResponse createReview(Long productId, UUID userId, CreateReviewRequ
         product.getSellerId(), product.getId(),
         "New review on " + product.getName(), notifBody);
 
-    return toResponse(review);
+    return toReviewResponse(review);
 }
 
 private void recalculateAndEvict(Product product) {
-    ReviewStats stats = reviewRepository.getStats(product.getId());
-    product.setAvgRating(stats.avg());
-    product.setRatingCount(stats.count());
+    double avg = reviewRepository.findAvgRating(product.getId()).orElse(0.0);
+    long count = reviewRepository.countByProductId(product.getId());
+    product.setAvgRating(BigDecimal.valueOf(avg).setScale(2, RoundingMode.HALF_UP));
+    product.setRatingCount((int) count);
     productRepository.save(product);
+    // Evict both caches — rating change invalidates individual product AND all list pages
+    cacheManager.getCache("productList").clear();
     cacheManager.getCache("product").evict(product.getId());
 }
 ```
@@ -375,35 +426,47 @@ public ProductResponse updateProduct(Long id, String sellerId, UpdateProductRequ
 }
 ```
 
-### Full-text search with GIN index
+### Full-text search with GIN index and popularity boost
 
 ```java
-// ProductRepository.java
-@Query("""
-    SELECT p FROM Product p
-    WHERE p.status = 'ACTIVE'
-      AND to_tsvector('english', p.name || ' ' || COALESCE(p.description, ''))
+// ProductRepository.java (native query)
+@Query(value = """
+    SELECT * FROM products
+    WHERE to_tsvector('english', name || ' ' || COALESCE(description, ''))
           @@ plainto_tsquery('english', :query)
-    ORDER BY ts_rank(
-        to_tsvector('english', p.name || ' ' || COALESCE(p.description, '')),
-        plainto_tsquery('english', :query)) DESC
-    """)
-Page<Product> searchActive(@Param("query") String query, Pageable pageable);
-// GIN index on tsvector makes @@ operator O(log N + results) instead of O(N)
+      AND status = 'ACTIVE'
+      AND (:categoryId IS NULL OR category_id = :categoryId)
+    ORDER BY
+      ts_rank(to_tsvector('english', name || ' ' || COALESCE(description, '')),
+              plainto_tsquery('english', :query))
+      * (1.0 + COALESCE(avg_rating, 0)::float / 5.0 * 0.2   -- rating boost (up to +20%)
+             + LEAST(stock_reserved, 50)::float / 50.0 * 0.1 -- popularity boost (up to +10%)
+        ) DESC
+    """, ...)
+Page<Product> searchActive(@Param("query") String query,
+                           @Param("categoryId") Long categoryId,
+                           Pageable pageable);
+// ts_rank is the base relevance score; multiplied by a popularity factor so
+// better-rated and more-purchased products rank higher on equal text relevance.
+// GIN index on the computed tsvector makes @@ O(log N + results) instead of O(N).
+// Also: searchActiveBySeller(..., sellerId, ...) for per-seller full-text search.
 ```
 
 ---
 
 ## 6. Trade-offs
 
-### Optimistic vs. pessimistic locking for inventory
+### Conditional UPDATE vs. optimistic locking vs. pessimistic locking for inventory
 
-| | Optimistic (`@Version`) | Pessimistic (`SELECT FOR UPDATE`) |
-|---|---|---|
-| Read performance | Reads never block | Readers wait while a writer holds the lock |
-| Write performance | Fast when contention is low | Consistent cost regardless of contention |
-| Failure mode | Retries exhaust → 409 Conflict | Lock wait timeout → slow failure |
-| **Our choice** | ✅ Inventory: mostly reads, moderate writes | Order state: catastrophic to lose a transition |
+| | Conditional UPDATE (our choice) | Optimistic (`@Version` + retry) | Pessimistic (`SELECT FOR UPDATE`) |
+|---|---|---|---|
+| Reads blocked? | Never | Never | Yes — while writer holds lock |
+| Write cost | One statement, always atomic | Load + save + possible retry | Load + lock + save |
+| Contention failure | Impossible (atomic) | Retries exhaust → 409 | Lock wait timeout → slow failure |
+| Spurious errors | None | `@Version` bumped by Hibernate dirty-check under concurrent load → false 409 | N/A |
+| **Our choice** | ✅ Inventory: one SQL, zero contention | Old approach — replaced due to spurious OptimisticLockException | Order state: catastrophic to lose a transition |
+
+The previous `@Version`+`@Retryable` implementation produced false `InsufficientStockException` errors under concurrent load because loading a full entity in a writable `@Transactional` context caused Hibernate to increment `@Version` on dirty-check even when no app code modified the entity. The conditional UPDATE sidesteps this entirely: no entity is loaded for the write path; `StockProjection` is used for the read-back.
 
 ### Fire-and-forget vs. synchronous review notification
 
@@ -453,13 +516,17 @@ If ai-service is down, the fallback result (whatever is returned) should never b
 
 ## 8. Interview Insights
 
-### Q: Why optimistic locking for inventory instead of pessimistic?
+### Q: Why a conditional native UPDATE for inventory instead of optimistic or pessimistic locking?
 
-**A:** The catalog is read-heavy — hundreds of reads per write in a browsing pattern. Pessimistic locking (`SELECT FOR UPDATE`) holds a DB row lock for the full duration of the reservation update, blocking concurrent reads. Optimistic locking only checks for conflicts at commit time — reads are never blocked. The cost is retries on version conflicts, which resolve in 1–2 attempts under normal concurrency. Flash sale scenarios (thousands of concurrent reservations) would need a queue or Redis atomic decrement.
+**A:** The original design used `@Version` + `@Retryable`. Under concurrent load it produced spurious `ObjectOptimisticLockingFailureException` errors: loading the full `Product` entity in a writable `@Transactional` context causes Hibernate's dirty-check to increment `@Version` even when no application code modifies the entity. After 3 failed retries, valid reservation requests were rejected as `InsufficientStockException`.
 
-### Q: What happens when all 3 `@Retryable` attempts are exhausted?
+The conditional UPDATE solves this entirely. `UPDATE products SET stock_reserved = stock_reserved + :qty WHERE id = :id AND (stock_quantity - stock_reserved) >= :qty` is a single atomic SQL statement — the availability check and the increment happen in the same operation, invisible to any concurrent transaction until it commits. No entity is loaded for the write path; `StockProjection` is used only to read back the new levels (avoiding a managed entity in the same transaction). Read-only paths (browse, search) are unaffected.
 
-**A:** Spring Retry re-throws the last `ObjectOptimisticLockingFailureException`. `GlobalExceptionHandler` maps it to 409 Conflict. The caller (order-service) treats 409 from the inventory endpoint as `InsufficientStockException` and triggers the compensation path: it releases any already-reserved items and marks the order `PAYMENT_FAILED`. No stock is orphaned in a reserved state.
+Pessimistic locking (`SELECT FOR UPDATE`) would work but serializes concurrent readers while a write is in progress — unacceptable for a read-heavy catalog.
+
+### Q: What happens if the conditional UPDATE returns 0?
+
+**A:** Zero rows updated means either the product doesn't exist or there's insufficient stock. The code disambiguates by calling `findById`: not found → 404; available < qty → `InsufficientStockException` → 409. `StockContentionException` is thrown only as a safety belt for a theoretically unreachable branch (updated == 0 but available >= qty). The caller (order-service) treats 409 from the reserve endpoint as insufficient stock and triggers saga compensation: marks the order `PAYMENT_FAILED` and releases any previously reserved items.
 
 ### Q: Why denormalize `avg_rating` onto `products` instead of computing it at query time?
 

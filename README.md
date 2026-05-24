@@ -6,12 +6,12 @@ Distributed e-commerce backend built with Go, Java/Spring Boot, and Python. Six 
 
 | Service | Language | Port | Key Pattern |
 |---|---|---|---|
-| user-service | Go (Gin + GORM) | 8001 | Pessimistic lock · Redis sessions · RS256 JWT |
-| product-service | Java/Spring Boot | 8081 | Optimistic lock · Redis cache-aside · pgvector AI search · reviews/ratings |
-| cart-service | Go (Gin + GORM) | 8002 | Redis-first · WATCH/MULTI/EXEC |
-| order-service | Java/Spring Boot | 8082 | Pessimistic lock · Kafka publisher · notifications |
-| payment-service | Go (Gin) | 8003 | Idempotency key · Kafka saga · DLQ |
-| ai-service | Python (FastAPI) | 8000 | sentence-transformers sidecar · `POST /embed` |
+| user-service | Go (Gin + GORM) | 8001 | Bcrypt worker pool · Redis-only lockout · RS256 JWT |
+| product-service | Java/Spring Boot | 8081 | Conditional UPDATE (atomic stock) · Redis cache-aside · pgvector AI search · reviews/ratings |
+| cart-service | Go (Gin + GORM) | 8002 | Redis-first · WATCH/MULTI/EXEC · product-validation cache · circuit breaker |
+| order-service | Java/Spring Boot | 8082 | Pessimistic lock · Transactional outbox → Kafka · in-app notifications |
+| payment-service | Go (Gin) | 8003 | Idempotency key · Kafka saga · PENDING-resume · DLQ |
+| ai-service | Python (FastAPI) | 9000 | sentence-transformers sidecar · `POST /embed` |
 | frontend | React 19 + Vite → Nginx | 3001 | TanStack Query · Zustand · JWT interceptor |
 | nginx | nginx:alpine | 80 | Reverse proxy · rate limiting · CORS |
 
@@ -143,11 +143,15 @@ bash script/perf-baseline.sh     # single-threaded latency baseline
 |---|---|
 | [`docs/technical/service_integration.md`](docs/technical/service_integration.md) | How all services communicate (HTTP, Kafka, JWT) — with Mermaid diagrams |
 | [`docs/technical/architecture.md`](docs/technical/architecture.md) | Overall system design and data flow |
-| [`docs/technical/development.md`](docs/technical/development.md) | Development environment setup guide |
-| [`docs/technical/databaseMigration.md`](docs/technical/databaseMigration.md) | Migration strategy (Flyway + golang-migrate) |
+| [`docs/technical/concurrency_control.md`](docs/technical/concurrency_control.md) | Concurrency strategies per service (conditional UPDATE, WATCH/EXEC, pessimistic lock) |
+| [`docs/technical/async_payment.md`](docs/technical/async_payment.md) | Async payment saga with Kafka — choreography, DLQ, idempotency |
+| [`docs/technical/Redis-First Architect.md`](<docs/technical/Redis-First Architect.md>) | Redis-first cart architecture with circuit breaker deep dive |
+| [`docs/technical/concurrent workloads.md`](<docs/technical/concurrent workloads.md>) | Concurrent workloads — load-test scenarios and results |
+| [`docs/technical/reliability.md`](docs/technical/reliability.md) | Reliability validation — failure modes and recovery paths |
 | [`docs/technical/security-checklist.md`](docs/technical/security-checklist.md) | OWASP API Top 10 audit results per service |
-| [`docs/technical/testing.md`](docs/technical/testing.md) | Testing strategy and coverage targets |
-| [`docs/technical/convention.md`](docs/technical/convention.md) | Code style and API conventions |
+| [`docs/planning/development.md`](docs/planning/development.md) | Development environment setup guide |
+| [`docs/planning/databaseMigration.md`](docs/planning/databaseMigration.md) | Migration strategy (Flyway + golang-migrate) |
+| [`docs/planning/convention.md`](docs/planning/convention.md) | Code style and API conventions |
 | [`docs/adrs/locking-strategy.md`](docs/adrs/locking-strategy.md) | Concurrency strategy rationale per service |
 | [`docs/adrs/saga-resilience.md`](docs/adrs/saga-resilience.md) | Kafka saga and DLQ design decisions |
 | [`cart-service/README.md`](cart-service/README.md) | cart-service deep dive (Redis WATCH, circuit breaker, sync worker) |
@@ -164,7 +168,7 @@ Key variables (all documented in [`.env.example`](.env.example)):
 |---|---|---|
 | `PRODUCT_SERVICE_URL` | `http://product-service:8081` | cart-service, order-service |
 | `ORDER_SERVICE_URL` | `http://order-service:8082` | product-service (review notifications) |
-| `AI_SERVICE_URL` | `http://ai-service:8000` | product-service |
+| `AI_SERVICE_URL` | `http://ai-service:9000` | product-service |
 | `KAFKA_BROKERS` | `kafka:29092` | order-service, payment-service |
 | `JWT_PRIVATE_KEY_PATH` | `./keys/private.pem` | user-service |
 | `JWT_PUBLIC_KEY_PATH` | `./keys/public.pem` | cart-service, payment-service, order-service |

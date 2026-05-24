@@ -31,19 +31,19 @@ Health check: `GET http://localhost:8082/health/live`
                         ┌──────────┐
                         │ PENDING  │  Created, awaiting payment
                         └────┬─────┘
-               ┌─────────────┼──────────────┐
-               ▼             ▼              ▼
-         CONFIRMED      PAYMENT_FAILED   CANCELLED
-         (Kafka saga)   (Kafka saga)    (manual cancel)
+               ┌─────────────┴──────────────┐
+               ▼                            ▼
+         CONFIRMED                      CANCELLED
+    (payments.completed)     (payments.failed OR user cancel)
                │
                ▼
-           SHIPPED   (seller action — internal only)
+           SHIPPED   (seller action — nginx blocks external)
                │
                ▼
-          DELIVERED  (seller action — internal only)
+          DELIVERED  (seller action — nginx blocks external)
 ```
 
-State transitions use `SELECT ... FOR UPDATE` to prevent concurrent updates from putting an order in two states simultaneously. Invalid transitions (e.g., DELIVERED → PENDING) return 409.
+`CANCELLED` and `DELIVERED` are terminal — no transitions out. There is **no** `PAYMENT_FAILED` status; payment failures transition to `CANCELLED`. All transitions use `SELECT ... FOR UPDATE` (pessimistic lock) to prevent concurrent updates. Invalid transitions return 409.
 
 ---
 
@@ -51,17 +51,22 @@ State transitions use `SELECT ... FOR UPDATE` to prevent concurrent updates from
 
 ### Orders — `/api/v1/orders`
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/` | Bearer JWT | Create order from cart |
-| `GET` | `/` | Bearer JWT | List orders (buyer: own orders; seller: pass `?sellerId=`) |
-| `GET` | `/:id` | Bearer JWT | Get order detail (buyer or owning seller) |
-| `PUT` | `/:id/cancel` | Bearer JWT | Cancel order (PENDING or CONFIRMED only) |
-| `PUT` | `/:id/ship` | Internal only (nginx 403) | Mark as SHIPPED |
-| `PUT` | `/:id/deliver` | Internal only (nginx 403) | Mark as DELIVERED |
-| `GET` | `/:id/history` | Bearer JWT | Get status change history |
+Auth for all routes is `X-User-Id` header (UUID), injected by Nginx after validating the Bearer JWT.
 
-**List query params:** `?sellerId=<uuid>` (seller view), `?status=<STATUS>`, standard `page`/`size`.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/` | Create order — reserves stock, writes outbox, notifies seller |
+| `GET` | `/` | List buyer's own orders |
+| `GET` | `/:id` | Get order detail (buyer ownership check) |
+| `PUT` | `/:id/cancel` | Cancel order (PENDING or CONFIRMED); releases stock; notifies seller |
+| `PUT` | `/:id/ship` | Mark SHIPPED (seller, nginx blocks external); notifies buyer |
+| `PUT` | `/:id/deliver` | Mark DELIVERED (nginx blocks external) |
+| `GET` | `/:id/history` | Get status change history |
+| `GET` | `/seller` | List orders as seller (filterable by `?status=`) |
+| `GET` | `/seller/:id` | Get single order detail as seller (ownership check) |
+| `GET` | `/purchase-verification` | Verify buyer purchased a product at DELIVERED status (called by product-service) |
+
+**List query params:** `?status=<STATUS>`, standard `page`/`size`.
 
 **Create order body:**
 ```json
@@ -84,11 +89,11 @@ State transitions use `SELECT ... FOR UPDATE` to prevent concurrent updates from
 
 ### Notifications — `/api/v1/orders/notifications`
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/` | Bearer JWT | List notifications for the current user (newest first) |
-| `PUT` | `/:id/read` | Bearer JWT | Mark a notification as read |
-| `POST` | `/internal/review` | **Blocked externally** | Called by product-service after a review is created |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Returns `{unreadCount, items[top 20 newest]}` for the current user |
+| `PUT` | `/mark-read` | Mark **all** notifications read for the current user (bulk) |
+| `POST` | `/internal/review` | **Blocked externally (nginx 403)** — called by product-service after a review is saved |
 
 **Notification shape:**
 ```json
@@ -124,14 +129,17 @@ order-service is both a **producer** and a **consumer**.
 
 ## Notifications
 
-Three types of notifications are created:
+Five notification events are created:
 
 | Event | Recipient | `orderId` | `productId` |
 |---|---|---|---|
 | Order placed | Seller | ✓ | null |
-| Payment confirmed | Buyer | ✓ | null |
-| Payment failed | Buyer | ✓ | null |
+| Order cancelled by customer | Seller | ✓ | null |
+| Payment confirmed (ready to ship) | Seller | ✓ | null |
+| Order shipped | Buyer | ✓ | null |
 | New review | Seller | null | ✓ |
+
+Note: payment failure triggers **no** notification from order-service — payment-service handles its own buyer-facing communication.
 
 Review notifications arrive via `POST /notifications/internal/review` from product-service (fire-and-forget HTTP call). This endpoint is blocked at nginx (`return 403`) — it is only reachable within the Docker network.
 
@@ -218,26 +226,35 @@ Integration tests use Testcontainers (real PostgreSQL) — no local setup needed
 
 ```
 src/main/java/com/ecommerce/order_service/
-├── controller/OrderController.java           # REST endpoints + internal notification endpoint
+├── controller/OrderController.java           # REST endpoints; auth via X-User-Id header (set by Nginx)
+├── filter/CorrelationFilter.java             # OncePerRequestFilter: X-Correlation-ID → MDC
 ├── service/
-│   ├── OrderService.java                     # interface
-│   ├── NotificationService.java              # creates/queries notifications
-│   └── impl/OrderServiceImpl.java            # state machine, pessimistic locking
+│   ├── OrderService.java                     # interface (createOrder, cancelOrder, shipOrder, verifyPurchase, ...)
+│   ├── OrderStateMachine.java                # VALID_TRANSITIONS map; validateTransition / canTransition
+│   ├── NotificationService.java              # notifySeller/notifyBuyer/notifySellerReview; getSummary; markAllRead
+│   └── impl/OrderServiceImpl.java            # pessimistic locking, outbox write, same-seller validation, @Async stock release
 ├── kafka/
-│   ├── OrderEventPublisher.java              # produces orders.created
-│   ├── OutboxPublisher.java                  # polls orders_outbox (FOR UPDATE SKIP LOCKED), publishes, marks published_at
-│   └── PaymentEventConsumer.java             # consumes payments.completed/failed
+│   ├── OrderEventProducer.java               # direct publishOrderCreated (used by tests; NOT called in createOrder)
+│   ├── OutboxPublisher.java                  # @Scheduled 100ms: FOR UPDATE SKIP LOCKED → publish → mark published_at
+│   │                                         # @Scheduled 60s: reaper re-queues stuck PENDING orders
+│   └── PaymentEventConsumer.java             # payments.completed → CONFIRMED + notify seller
+│                                             # payments.failed → CANCELLED + @Async releaseStockForOrder
 ├── model/
-│   ├── Order.java                            # JPA entity (status: VARCHAR via @Enumerated STRING)
+│   ├── Order.java                            # @Enumerated(STRING) on status VARCHAR
 │   ├── OrderItem.java
-│   ├── OrderStatus.java                      # enum
+│   ├── OrderStatus.java                      # PENDING, CONFIRMED, CANCELLED, SHIPPED, DELIVERED
 │   ├── OrderStatusHistory.java
-│   ├── Notification.java                     # orderId + productId (one nullable per notification)
+│   ├── OutboxEvent.java                      # orderId, payload JSONB, headers JSONB, published_at
+│   ├── Notification.java                     # orderId XOR productId (mutually exclusive)
 │   └── NotificationType.java
 ├── dto/
 │   ├── ReviewNotificationRequest.java        # {sellerId, productId, title, body}
-│   └── NotificationResponse.java            # {id, orderId, productId, title, body, isRead, createdAt}
+│   ├── NotificationResponse.java             # {id, orderId, productId, title, body, isRead, createdAt}
+│   ├── NotificationSummaryResponse.java      # {unreadCount, items[]}
+│   └── PurchaseVerificationResponse.java     # {verified: boolean}
 └── repository/
-    ├── OrderRepository.java                  # findByIdWithLock, seller + status queries
-    └── NotificationRepository.java
+    ├── OrderRepository.java                  # findByIdWithLock; seller queries; findStuckPendingOrderIds
+    ├── OrderItemRepository.java              # findVerifiedDeliveredItem (purchase verification)
+    ├── OutboxEventRepository.java            # findUnpublishedForUpdate (FOR UPDATE SKIP LOCKED)
+    └── NotificationRepository.java           # countUnread; findTop20; markAllReadForUser
 ```
