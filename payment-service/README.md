@@ -44,6 +44,10 @@ docker compose up -d payment-service
 
 pprof is exposed on `:6060` (internal only — must not be publicly exposed).
 
+**Middleware chain:** `Recovery → Correlation → Logger` (global); `Auth(JWT)` applied to the read endpoints only. `POST /payments` has no auth — it is intended as an internal trigger path.
+
+Mock gateway latency (50–200 ms) and worker count (5 goroutines) are compile-time constants in `config/config.go`, not env vars.
+
 ## Resilience
 
 **3-tier error classification:**
@@ -74,8 +78,6 @@ See `docs/adrs/saga-resilience.md` for the full rationale.
 | `KAFKA_BROKERS` | `localhost:9092` | Kafka broker address (CSV) |
 | `KAFKA_CONSUMER_GROUP` | `payment-service` | Consumer group ID |
 | `GATEWAY_SUCCESS_RATE` | `0.9` | Mock gateway success probability (0.0–1.0) |
-| `GATEWAY_MIN_LATENCY_MS` | `50` | Mock gateway min latency |
-| `GATEWAY_MAX_LATENCY_MS` | `200` | Mock gateway max latency |
 | `JWT_PUBLIC_KEY_PATH` | `./keys/public.pem` | RS256 public key for JWT validation |
 | `ENV` | `development` | Set to `production` for Gin release mode |
 
@@ -123,14 +125,19 @@ To replay a DLQ message: base64-decode `originalValue` from the DLQ envelope and
 ## Key Files
 
 ```
-cmd/server/main.go                 # wiring: DB, Kafka, router, graceful shutdown
+cmd/server/main.go                       # wiring: DB, Kafka, router, graceful shutdown
+config/config.go                         # env-based configuration; KafkaWorkerCount hardcoded=5
 internal/
-  handler/payment_handler.go       # HTTP endpoints
-  service/payment_service.go       # ProcessPayment with idempotency check
+  handler/payment_handler.go             # HTTP endpoints; admin bypass via role claim
+  service/payment_service.go             # ProcessPayment: idempotency dedup + PENDING-resume
   kafka/
-    consumer.go                    # poll loop, 3-tier error classification, DLQ routing
-    producer.go                    # publishes completed/failed/dlq
-  model/payment.go                 # GORM model with UNIQUE idempotency_key
-  client/gateway_client.go         # mock payment gateway (configurable success rate)
-  middleware/auth.go               # RS256 JWT validation
+    consumer.go                          # fetch loop, 5-worker pool, 3-tier error classification, DLQ routing
+    producer.go                          # synchronous writes to completed/failed/dlq; __TypeId__ header
+    event/events.go                      # OrderCreatedEvent, PaymentCompletedEvent, PaymentFailedEvent
+  repository/payment_repository.go       # Create (tx: payment + history row), UpdateStatus, FindBy*
+  model/payment.go                       # Payment + PaymentHistory GORM models; PaymentStatus/Method
+  gateway/mock_gateway.go                # mock payment gateway (configurable success rate + latency)
+  middleware/
+    auth.go                              # RS256 JWT validation; sets userID + role in Gin context
+    correlation.go                       # reads/generates X-Correlation-ID; stores in Gin + request context
 ```

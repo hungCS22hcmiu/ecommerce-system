@@ -9,19 +9,22 @@ This document describes how the five microservices of the e-commerce platform in
 ```mermaid
 graph TD
     Client([Browser / API Client])
+    FE[frontend :3001]
     NGX[Nginx :80]
     US[user-service :8001]
     PS[product-service :8081]
     CS[cart-service :8002]
     OS[order-service :8082]
     PAY[payment-service :8003]
+    AI[ai-service :9000\ninternal only]
     KAFKA[(Kafka)]
     PG[(PostgreSQL)]
     RDS[(Redis)]
 
     Client -->|HTTP| NGX
+    NGX -->|SPA catch-all| FE
     NGX -->|/api/v1/auth, /users| US
-    NGX -->|/api/v1/products, /inventory| PS
+    NGX -->|/api/v1/products, /inventory, /categories| PS
     NGX -->|/api/v1/cart| CS
     NGX -->|/api/v1/orders| OS
     NGX -->|/api/v1/payments| PAY
@@ -30,8 +33,11 @@ graph TD
     OS -->|POST /inventory/:id/reserve| PS
     OS -->|POST /inventory/:id/release| PS
     OS -->|GET /products/:id| PS
+    PS -->|POST /embed| AI
+    PS -->|POST /notifications/internal/review| OS
+    PS -->|GET /purchase-verification| OS
 
-    OS -->|orders.created| KAFKA
+    OS -->|orders.created\n(via outbox)| KAFKA
     KAFKA -->|orders.created| PAY
     PAY -->|payments.completed| KAFKA
     PAY -->|payments.failed| KAFKA
@@ -96,6 +102,54 @@ Called after stock is reserved to capture `name` and `price` for the order item 
 **Retry / Circuit breaker:** order-service uses Spring's `@CircuitBreaker` and `@Retry` annotations on `ProductServiceClient`.
 
 **Config:** `PRODUCT_SERVICE_URL=http://product-service:8081`
+
+---
+
+### 1.3 Product Service → AI Service
+
+**When:** A user submits an AI search query (`GET /api/v1/products/ai-search?q=`), or a product is created/updated (async embedding).
+
+**What product-service calls:**
+```
+POST http://ai-service:9000/embed
+{ "text": "search query or product description" }
+```
+
+**Response used:**
+```json
+{ "embedding": [0.021, -0.045, ...] }
+```
+
+**Resilience:** Resilience4j circuit breaker (3 consecutive failures → open, 10s timeout). When open, AI search falls back to keyword search. Cache write is skipped on `AIServiceException`.
+
+**Write-through embedding:** `ProductEmbeddingService.scheduleEmbedding()` fires `@Async` on every product create/update. Failures are logged as WARN and never surface to the caller.
+
+**Config:** `AI_SERVICE_URL=http://ai-service:9000` (not exposed via Nginx)
+
+---
+
+### 1.4 Product Service → Order Service
+
+Product service makes two distinct calls to order-service, both on the internal Docker network and blocked externally by Nginx.
+
+#### Purchase Verification
+```
+GET http://order-service:8082/api/v1/orders/purchase-verification
+    ?productId={id}&orderItemId={uuid}
+Header: X-User-Id: {customerId}
+```
+Called before creating a review to confirm the customer actually purchased the product.
+
+**Error handling:** On failure, throws `PurchaseVerificationException` → review creation rejected with 400.
+
+#### Review Notification (fire-and-forget)
+```
+POST http://order-service:8082/api/v1/orders/notifications/internal/review
+{ "sellerId": "uuid", "productId": 1, "title": "...", "body": "..." }
+```
+Called after a review is successfully persisted to notify the seller. Failures are logged as WARN and do not affect the review response.
+
+**Config:** `ORDER_SERVICE_URL=http://order-service:8082`
 
 ---
 
@@ -186,8 +240,9 @@ sequenceDiagram
 
     Client->>OrderService: POST /api/v1/orders
     OrderService->>ProductService: reserve stock (parallel HTTP)
-    OrderService->>OrderService: persist order (status=PENDING)
-    OrderService->>Kafka: publish orders.created
+    OrderService->>OrderService: persist order (status=PENDING) + outbox row (atomic)
+    Note right of OrderService: OutboxPublisher polls every 100ms<br/>SELECT ... FOR UPDATE SKIP LOCKED
+    OrderService->>Kafka: publish orders.created (OutboxPublisher)
     Note right of Kafka: topic: orders.created
 
     Kafka->>PaymentService: orders.created event
@@ -305,7 +360,7 @@ sequenceDiagram
     participant PaymentService
 
     Client->>UserService: POST /api/v1/auth/login
-    UserService->>UserService: bcrypt verify + SELECT FOR UPDATE
+    UserService->>UserService: bcrypt verify (worker pool) + Redis login-attempt counter
     UserService-->>Client: { accessToken (RS256 JWT), refreshToken }
 
     Note over Client: accessToken in memory (15 min TTL)<br/>refreshToken in localStorage (7 days)
@@ -330,14 +385,16 @@ sequenceDiagram
 
 **Public key distribution:** The file `./user-service/keys/public.pem` is mounted read-only at `/app/keys/public.pem` into cart-service and payment-service via Docker volume. Each service loads the key at startup.
 
-**Services that validate JWT:**
-- `cart-service` — all `/api/v1/cart` routes (extracts `userID` for Redis key)
-- `payment-service` — all `/api/v1/payments` routes (identifies the paying user)
-- `order-service` — all `/api/v1/orders` routes (via Spring Security)
+**Services that validate JWT (RS256 signature):**
+- `cart-service` — all `/api/v1/cart` routes; loads `public.pem` at startup, extracts `userID` claim for Redis key
+- `payment-service` — read endpoints (`GET /payments`, `GET /payments/:id`); `POST /payments` is internal and requires no JWT
 
-**Services that do not validate JWT:**
-- `product-service` — public catalog; seller operations use the `X-Seller-Id` header instead
-- `user-service` — issues tokens, not a consumer
+**Services that use trusted headers instead of validating JWT:**
+- `order-service` — reads `X-User-Id` header set by the frontend from its JWT claims; no public key mounted
+- `product-service` — public catalog endpoints need no auth; seller write operations read `X-Seller-Id` header
+
+**Services that issue tokens:**
+- `user-service` — only service with `private.pem`; issues JWT on login/refresh
 
 **Logout:** The access token JTI is blacklisted in Redis (TTL = remaining token lifetime). All refresh tokens for the user are revoked in the DB. Subsequent requests with the old token fail at the blacklist check before signature verification.
 
@@ -428,15 +485,16 @@ Client request
 | → Kafka | `kafka:29092` (internal listener) |
 | → product-service | `http://product-service:8081` |
 | → order-service | `http://order-service:8082` |
+| → ai-service | `http://ai-service:9000` (internal only, no Nginx exposure) |
 
 **Volume shared across services:**
-- `./user-service/keys:/app/keys:ro` — mounted into user-service, cart-service, payment-service for JWT key access.
+- `./user-service/keys:/app/keys:ro` — mounted into **user-service** (private + public key), **cart-service** and **payment-service** (public key only). Order-service does not receive the key mount — it trusts `X-User-Id` header instead of validating JWT.
 
 **Startup order:**
 1. `postgres`, `redis`
 2. `zookeeper` → `kafka`
-3. `user-service`, `product-service`
-4. `cart-service`, `order-service`, `payment-service`
+3. `ai-service`
+4. `user-service`, `product-service` (depends on ai-service), `order-service`, `cart-service`, `payment-service`
 5. `frontend`
 6. `nginx`
 
@@ -450,14 +508,17 @@ Client request
 | order-service | product-service | HTTP POST | `/api/v1/inventory/{id}/reserve` | Order created |
 | order-service | product-service | HTTP POST | `/api/v1/inventory/{id}/release` | Order cancelled / creation failed |
 | order-service | product-service | HTTP GET | `/api/v1/products/{id}` | Capture price at order time |
-| order-service | Kafka | Publish | `orders.created` | Order persisted (status=PENDING) |
+| product-service | ai-service | HTTP POST | `/embed` | AI search query or product create/update embedding |
+| product-service | order-service | HTTP GET | `/api/v1/orders/purchase-verification` | Verify purchase before review |
+| product-service | order-service | HTTP POST | `/api/v1/orders/notifications/internal/review` | Notify seller after review created |
+| order-service | Kafka | Publish | `orders.created` | OutboxPublisher after order persisted (status=PENDING) |
 | payment-service | Kafka | Consume | `orders.created` | Trigger payment processing |
 | payment-service | Kafka | Publish | `payments.completed` | Payment gateway succeeded |
 | payment-service | Kafka | Publish | `payments.failed` | Gateway declined or saga failure |
 | payment-service | Kafka | Publish | `payments.dlq` | Poison pill or retry exhaustion |
 | order-service | Kafka | Consume | `payments.completed` | Confirm order |
 | order-service | Kafka | Consume | `payments.failed` | Cancel order + release stock |
-| user-service | cart-service | JWT (RS256) | — | Token issued at login, validated per request |
-| user-service | payment-service | JWT (RS256) | — | Token issued at login, validated per request |
-| user-service | order-service | JWT (RS256) | — | Token issued at login, validated per request |
+| user-service | cart-service | JWT (RS256) | — | Token issued at login, signature validated per request |
+| user-service | payment-service | JWT (RS256) | — | Token issued at login, signature validated on read endpoints |
+| user-service | order-service | X-User-Id header | — | Frontend extracts userId from JWT claims, sends as header |
 | Nginx | all services | HTTP proxy | See route table | All external client traffic |

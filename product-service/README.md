@@ -83,7 +83,7 @@ All responses follow the envelope format:
 | `PUT` | `/reviews/{reviewId}` | Bearer JWT | Update own review |
 | `DELETE` | `/reviews/{reviewId}` | Bearer JWT | Delete own review |
 
-On review creation: `avg_rating` and `rating_count` on the product are recalculated immediately. Then `orderServiceClient.notifySellerReview()` is called fire-and-forget to notify the seller (logged WARN on failure, never surfaces to caller).
+On review creation: (1) `orderServiceClient.verifyPurchase()` is called synchronously — if the user did not actually purchase this product via order-service, the review is rejected with 403. (2) Duplicate check is enforced at the DB level via `UNIQUE(customer_id, order_item_id)` — `DataIntegrityViolationException` is caught and mapped to 409. (3) `avg_rating` and `rating_count` are recalculated immediately, and both `product` and `productList` caches are evicted. (4) `orderServiceClient.notifySellerReview()` is called fire-and-forget to notify the seller (logged WARN on failure, never surfaces to caller).
 
 ### Seller Public Profile — `/api/v1/sellers`
 
@@ -177,7 +177,7 @@ WHERE id = :id AND stock_reserved >= :qty
 
 ## AI Search — pgvector
 
-**Flow:** query text → `EmbeddingClient.embed()` (HTTP to ai-service) → `SET LOCAL ivfflat.probes=10` → `findIdsBySemanticSimilarity(vector, limit)` → ranked `AISearchResponse{query, results, scores, mode}`.
+**Flow:** query text → `EmbeddingClient.embed()` (HTTP to ai-service) → `SET LOCAL ivfflat.probes=10` → `findIdsBySemanticSimilarity(vector, categoryId, limit)` (or `findIdsBySemanticSimilarityBySeller` when `sellerId` is set) → re-rank: similarity 75% + rating boost 15% + sales-popularity boost 10% → `AISearchResponse{query, results, scores, mode}`. Latency per phase (embed/vector/rerank) is logged at INFO.
 
 **Write-through embedding:** `ProductEmbeddingService.scheduleEmbedding()` fires `@Async` on every `createProduct` / `updateProduct`. Concatenates `name + description + categoryName`, sends to ai-service, stores 384-dim vector in `products.embedding`. Failures logged WARN; never surface to caller. Configurable via `ai-service.write-through-enabled`.
 
@@ -217,8 +217,10 @@ WHERE id = :id AND stock_reserved >= :qty
 src/main/java/com/ecommerce/product_service/
 ├── config/
 │   ├── AsyncConfig.java            # Thread pool for @Async (core=5, max=20)
+│   ├── HttpClientConfig.java       # RestTemplate bean configuration
 │   ├── JpaConfig.java              # @EnableJpaAuditing
 │   ├── RedisConfig.java            # @EnableCaching, RedisCacheManager, Jackson serializer
+│   ├── RestTemplateConfig.java     # RestTemplate with connection/read timeouts
 │   └── RetryConfig.java            # @EnableRetry
 ├── controller/
 │   ├── HealthController.java
@@ -228,16 +230,20 @@ src/main/java/com/ecommerce/product_service/
 │   └── CategoryController.java
 ├── client/
 │   ├── EmbeddingClient.java        # HTTP to ai-service
-│   └── OrderServiceClient.java     # notifySellerReview (fire-and-forget)
-├── model/                          # Product, Category, ProductImage, StockMovement, Review
-├── repository/                     # Spring Data JPA; ratedOnly derived query methods
+│   └── OrderServiceClient.java     # verifyPurchase (blocking) + notifySellerReview (fire-and-forget)
+├── dto/
+│   └── StockProjection.java        # Interface projection: stockQuantity + stockReserved only
+├── filter/
+│   └── CorrelationFilter.java      # OncePerRequestFilter: reads/generates X-Correlation-ID → MDC
+├── model/                          # Product, Category, ProductImage, StockMovement, ProductReview
+├── repository/                     # Spring Data JPA; conditional UPDATE queries; StockProjection; ratedOnly methods; seller AI/FTS search variants
 └── service/
-    ├── CacheWarmupService.java
-    ├── ProductEmbeddingService.java # @Async write-through embedding
-    ├── AISearchService.java / serviceImpl/AISearchServiceImpl.java
-    ├── ProductService.java / serviceImpl/ProductServiceImpl.java  (ratedOnly branching)
-    ├── InventoryService.java / serviceImpl/InventoryServiceImpl.java
-    └── ReviewService.java / serviceImpl/ReviewServiceImpl.java
+    ├── CacheWarmupService.java      # warmCache() + warmAI() on ApplicationReadyEvent
+    ├── ProductEmbeddingService.java # @Async write-through embedding (only on semantic-change fields)
+    ├── AISearchService.java / serviceImpl/AISearchServiceImpl.java  (re-rank: sim+rating+sales)
+    ├── ProductService.java / serviceImpl/ProductServiceImpl.java     (ratedOnly branching, seller overload)
+    ├── InventoryService.java / serviceImpl/InventoryServiceImpl.java (conditional UPDATE + StockProjection)
+    └── ReviewService.java / serviceImpl/ReviewServiceImpl.java       (purchase verify + dual cache evict)
 ```
 
 ---
@@ -268,10 +274,14 @@ src/main/java/com/ecommerce/product_service/
 
 | Decision | Why |
 |----------|-----|
-| Optimistic locking, not pessimistic | Catalog is read-heavy; `SELECT FOR UPDATE` blocks readers. @Version adds zero overhead on reads. |
+| Conditional native UPDATE for inventory | Single atomic SQL (no read-modify-write loop); eliminates the spurious `@Version` increment from Hibernate dirty-check that caused false `InsufficientStockException` under concurrent load. |
+| `StockProjection` for read-back | Loading a full managed entity after a conditional UPDATE in the same `@Transactional` context triggers Hibernate dirty-check → `@Version` increment → `OptimisticLockException` under concurrent requests. The projection avoids creating a managed entity. |
 | Soft delete | Preserves audit history; FK constraints stay valid; reversible. |
 | Cache-aside, not write-through | Redis failure doesn't break writes; app controls cache population timing. |
 | `productList` TTL = 3 min | Pagination key space is huge. Short TTL prevents memory explosion. |
-| `avg_rating` denormalized on products | Avoids aggregate query on every product listing. Recalculated synchronously on review mutation. |
+| `avg_rating` denormalized on products | Avoids aggregate query on every product listing. Recalculated synchronously on review mutation; evicts `product` + `productList` caches. |
+| Purchase verification before saving review | Prevents fake reviews from users who never bought the product; synchronous because the review is invalid without it. |
+| Review duplicate via `DataIntegrityViolationException` | DB `UNIQUE` constraint is the authoritative guard; catching the exception is simpler and race-condition-free vs. a pre-check + insert. |
 | Review notification fire-and-forget | Seller notification is best-effort; review creation should never fail because the notification service is down. |
 | `ratedOnly` boolean param | Spring Data derived queries handle `ratingCount > 0` cleanly; the Pageable sort alone cannot exclude zero-rating rows. |
+| AI re-ranking (sim 75% + rating 15% + sales 10%) | Pure vector similarity ignores product quality signals; blending with rating and purchase popularity improves relevance for real users. |
