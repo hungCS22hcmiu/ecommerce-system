@@ -13,7 +13,7 @@ Distributed e-commerce backend built with Go, Java/Spring Boot, and Python. Six 
 | payment-service | Go (Gin) | 8003 | Idempotency key · Kafka saga · PENDING-resume · DLQ |
 | ai-service | Python (FastAPI) | 9000 | sentence-transformers sidecar · `POST /embed` |
 | frontend | React 19 + Vite → Nginx | 3001 | TanStack Query · Zustand · JWT interceptor |
-| nginx | nginx:alpine | 80 | Reverse proxy · rate limiting · CORS |
+| nginx | nginx:alpine | 80 | Reverse proxy · rate limiting · CORS · dynamic DNS resolver |
 
 All external traffic enters through **port 80** (Nginx). Services are not directly exposed in production.
 
@@ -48,14 +48,14 @@ Sample credentials (from `script/sample_users.sql`):
 Browser → Nginx :80 → user-service   :8001  (auth, profiles, public seller profile)
                     → product-service:8081  (catalog, inventory, AI search, reviews)
                     → cart-service   :8002  (Redis-first cart)
-                    → order-service  :8082  (orders, notifications, Kafka publisher)
-                    → payment-service:8003  (Kafka consumer, saga)
+                    → order-service  :8082  (orders, notifications, transactional outbox)
+                    → payment-service:8003  (Kafka consumer, saga, PENDING-resume)
 
 product-service ──REST──▶  ai-service:9000          (embed query / write-through re-embed)
 product-service ──REST──▶  order-service:8082        (review notification, fire-and-forget)
 
-order-service   ──kafka──▶  orders.created            ──▶  payment-service
-payment-service ──kafka──▶  payments.completed/failed  ──▶  order-service
+order-service   ──outbox──▶  orders.created            ──▶  payment-service
+payment-service ──kafka───▶  payments.completed/failed  ──▶  order-service
 ```
 
 **Databases:** Single PostgreSQL instance, 5 logical databases (`ecommerce_users/products/carts/orders/payments`). Schemas auto-applied from `script/init-databases.sql` at container start.
