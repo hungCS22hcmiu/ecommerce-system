@@ -297,6 +297,171 @@ Single entry point for all client traffic. Pure configuration — not a custom s
 - ProductDetailPage scrolls to top on `id` change; back link resolves to product's own category
 - `Dockerfile` uses `npx vite build` directly (bypasses `tsc -b` strict check on test files)
 
+## Trade-offs
+
+This section documents the key architectural decisions and what was given up to get them.
+
+### Microservices vs Monolith
+
+**Chosen:** 5 separate services (Go + Java + Python), each deployed independently.
+
+| What we gain | What we give up |
+|---|---|
+| Services can scale independently (cart is more latency-sensitive than user) | Network hop overhead on every cross-service call |
+| Language fit per problem: Go for I/O-bound, Java for complex transactions | Distributed debugging — a single request may span 3+ services |
+| Failures are contained — a payment outage doesn't kill product browsing | Eventual consistency between services; no cross-service ACID transactions |
+| Teams can deploy independently | Operational burden: 5 Dockerfiles, 5 migration systems, 5 health checks |
+
+**When a monolith would be better:** Early-stage startup with <5 engineers or <10k users/day. The operational cost here is justified only once the services have genuinely independent scaling or change rates.
+
+---
+
+### Go vs Java Language Split
+
+**Rule of thumb used:** Go for I/O-bound services with high concurrency (user, cart, payment); Java/Spring Boot for services with complex domain logic and transactional state machines (product, order).
+
+| Service | Why Go | Why Java would hurt |
+|---|---|---|
+| Cart | Redis WATCH/MULTI/EXEC — goroutine-per-request maps cleanly onto Redis pipelining | Spring's thread-per-request model adds thread overhead for what is essentially a Redis CRUD service |
+| Payment | Gateway I/O + Kafka consume/produce — goroutines are cheap when blocked on network | JVM startup time and memory footprint for a lightweight gateway-bridge service |
+| User | bcrypt worker pool — explicit goroutine management for CPU-bound work | Thread pool sizing in Spring would achieve the same, but with more boilerplate |
+
+| Service | Why Java | Why Go would hurt |
+|---|---|---|
+| Order | Saga state machine + outbox + `@Async` + `@Retryable` — Spring annotations compose naturally | Go would require manually wiring retry logic, async pools, and transaction scoping |
+| Product | Flyway migrations + conditional native UPDATE + Testcontainers integration tests — mature Spring Data ecosystem | Go's GORM doesn't support Testcontainers + pgvector as cleanly; pgvector Java driver is more mature |
+
+---
+
+### Single PostgreSQL Instance vs One DB per Service
+
+**Chosen:** One Postgres process, 5 logical databases (separate schemas/DB names).
+
+| What we gain | What we give up |
+|---|---|
+| One `docker-compose` volume, one backup target, one connection pool to configure | A single Postgres crash takes all 5 services down |
+| Simpler local development — `docker compose up` gives the full stack | Can't tune Postgres per-service (e.g., different `max_connections` for cart vs product) |
+| Cross-DB joins are still possible for debugging (psql admin) | Application-level FK enforcement only — no DB-enforced referential integrity across services |
+
+**How we mitigate:** Each service's GORM/Flyway migration only touches its own DB. Cross-service references are string UUIDs in application code, never foreign keys to another DB.
+
+**Cloud path:** Each logical DB maps cleanly to one RDS instance when the system needs to scale — the application code doesn't change, only the `DB_HOST` env var per service.
+
+---
+
+### Choreography Saga vs Orchestration
+
+**Chosen:** Kafka choreography — services react to events (`orders.created` → payment-service → `payments.completed/failed` → order-service) with no central saga orchestrator.
+
+| What we gain | What we give up |
+|---|---|
+| No single point of failure (no orchestrator service to go down) | The saga flow is implicit — to understand the full flow, you must trace topics across services |
+| Services remain loosely coupled; adding a new step (e.g., warehouse notification) requires no change to existing services | Harder to implement complex compensations (e.g., partial rollback across 4 services) |
+| Kafka handles durability and redelivery natively | Debugging a stuck saga requires correlating logs across 2+ services by `correlation-id` |
+
+**Why not orchestration here:** The saga only has 2 hops (order → payment → order). Orchestration is worth the complexity when sagas have 4+ steps or need dynamic routing; at 2 hops it's unnecessary overhead.
+
+---
+
+### Transactional Outbox vs Direct Kafka Publish
+
+**Chosen:** Order Service writes an `orders_outbox` row atomically with the order, then a separate `OutboxPublisher` polls and publishes to Kafka.
+
+| What we gain | What we give up |
+|---|---|
+| Atomic: order + event commit or both roll back — no "order created but event never sent" | Extra polling loop adds ~100ms latency to event delivery |
+| At-least-once delivery guaranteed even if Kafka is down at order creation time | `orders_outbox` table grows until reaped — needs `published_at` cleanup job |
+| Reaper job recovers PENDING orders older than 2 min with no unpublished row | Two processes (OutboxPublisher + Reaper) must not both publish the same row — `FOR UPDATE SKIP LOCKED` prevents this |
+
+**Alternative considered:** Direct Kafka publish inside the order TX. Rejected because the Kafka client cannot participate in a Postgres transaction — a Kafka failure after DB commit would lose the event silently.
+
+---
+
+### Pessimistic Lock (Order) vs Optimistic Lock vs Redis
+
+**Each service chose its own strategy based on its contention profile:**
+
+| Service | Strategy | Rationale |
+|---|---|---|
+| Order | `SELECT … FOR UPDATE` | State transitions (PENDING→CONFIRMED→SHIPPED) are catastrophic if duplicated. Lock duration is sub-ms (no external I/O inside the lock). |
+| Cart | Redis `WATCH/MULTI/EXEC` | Primary store is Redis; optimistic is correct for low-contention per-user writes. No DB row to lock. |
+| Product (stock) | Conditional UPDATE (`WHERE stock_available >= qty`) | Single SQL statement; concurrent updates self-serialize at the DB engine level without explicit locks or version retries. |
+| User (login) | Redis INCR (no DB lock) | Bcrypt takes 100ms+; holding a row lock for that duration serializes all logins for the same email. Redis counter is best-effort but sufficient given the 5-attempt threshold. |
+| Payment | DB UNIQUE constraint on `idempotency_key` | The threat is duplicate Kafka delivery, not concurrent users. A UNIQUE constraint is the cheapest correct solution. |
+
+See [locking-strategy.md](adrs/locking-strategy.md) for deeper rationale.
+
+---
+
+### Redis-First Cart vs DB-Backed Cart
+
+**Chosen:** Cart data lives primarily in Redis (`cart:{userId}`). There is no `carts` DB table used as the source of truth.
+
+| What we gain | What we give up |
+|---|---|
+| Sub-millisecond reads/writes — cart is the most latency-sensitive user interaction | Cart data is lost if Redis goes down without a backup (or if the TTL expires) |
+| WATCH/MULTI/EXEC gives atomic add/remove without a DB transaction | No durable audit trail of cart mutations |
+| 30-min TTL cleans up abandoned carts automatically | Harder to query "all users who have product X in their cart" (no SQL) |
+
+**Mitigation:** The 30-min TTL resets on every write (`EXPIRE` called on each mutation), so active carts stay alive. Losing an abandoned cart is an acceptable UX tradeoff.
+
+---
+
+### Stateless JWT (RS256) vs Opaque Session Tokens
+
+**Chosen:** RS256 JWTs for access tokens; opaque random hex for refresh tokens.
+
+| What we gain | What we give up |
+|---|---|
+| Any service can verify an access token using only the public key — no round-trip to user-service | Revocation requires a Redis blacklist check per request (O(1), but an extra hop) |
+| 15-min TTL limits blast radius if a token is stolen | Short TTL means clients must implement silent refresh (handled by `lib/axios.ts` queue-based interceptor) |
+| Refresh tokens stored as SHA-256 hashes — DB breach doesn't expose usable tokens | Two-token model (access + refresh) adds implementation complexity on the client |
+
+**Why RS256 over HS256:** RS256 uses an asymmetric key pair. Only user-service holds the private key (signs tokens). All other services hold only the public key (verify tokens). A compromise of product-service cannot be used to forge tokens.
+
+---
+
+### pgvector (Embedded) vs Dedicated Vector Database
+
+**Chosen:** pgvector extension inside the existing PostgreSQL instance.
+
+| What we gain | What we give up |
+|---|---|
+| No additional infrastructure to operate (no Pinecone, Weaviate, Qdrant) | IVFFLAT index is approximate and requires `SET LOCAL ivfflat.probes=10` tuning for recall |
+| Joins between product metadata and embeddings are a single query | Recall degrades as product count grows beyond ~1M rows without re-tuning `lists` |
+| Embedding generation isolated in a Python sidecar; storage + search stay in Postgres | AI Service is ~1.5 GB Docker image (CPU torch) — slow cold start |
+
+**When to migrate:** If the product catalog exceeds ~500k rows and recall quality drops, move embeddings to a dedicated ANN service (Weaviate/Qdrant) while keeping metadata in Postgres.
+
+---
+
+### Nginx as API Gateway vs Dedicated API Gateway
+
+**Chosen:** Nginx handles routing, rate limiting, CORS, security headers, and blocking of internal routes.
+
+| What we gain | What we give up |
+|---|---|
+| Zero additional services to operate — Nginx is already serving the React SPA | No built-in auth middleware, tracing plugins, or dynamic routing without custom Lua |
+| Variable-based `proxy_pass` with `resolver 127.0.0.11` re-resolves upstream IPs after container restarts | Rate limiting is IP-based only — no per-user or per-token rate limiting |
+| All security headers centralized in one config file | Adding a new route (e.g., a new microservice) requires an Nginx config change and reload |
+
+**Cloud path:** Replace with AWS API Gateway or Kong when per-user rate limiting, auth delegation, or dynamic service discovery becomes a requirement.
+
+---
+
+### Denormalized `avg_rating` / `rating_count` vs Real-Time Aggregation
+
+**Chosen:** Product rows store pre-computed `avg_rating` and `rating_count`, updated on every review write.
+
+| What we gain | What we give up |
+|---|---|
+| `O(1)` product list query — no `GROUP BY` / subquery needed for rating | Rating data can be stale briefly during concurrent review writes |
+| Supports `ratedOnly=true` filter (`WHERE rating_count > 0`) as a simple column predicate | Recalculation logic must run inside the review write transaction — review create/update/delete are slightly heavier |
+
+**Alternative considered:** Computing on read with a materialized view. Rejected because the materialized view refresh interval would need to match user expectations (near-real-time), which is operationally complex for marginal benefit.
+
+---
+
 ## Deployment
 
 ### Containerization

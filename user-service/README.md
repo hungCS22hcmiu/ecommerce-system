@@ -24,9 +24,12 @@ user-service/
 │   ├── blacklist/              # JWT blacklist via Redis (blacklist:{jti})
 │   ├── jwt/                    # RS256 JWT generation and validation
 │   ├── loginattempt/           # Login attempt counter via Redis (login_attempts:{email})
-│   ├── password/               # bcrypt hash and compare (cost 12)
+│   ├── password/               # bcrypt hash/compare + bounded worker pool
+│   ├── reset/                  # Password-reset tokens, cooldowns, attempt counters in Redis
 │   ├── response/               # Standardized JSON response envelope helpers
-│   └── session/                # Session cache via Redis (session:{userID}, 30 min TTL)
+│   ├── session/                # Session cache via Redis (session:{userID}, 30 min TTL)
+│   └── verification/           # Email verification codes, cooldowns, attempt counters in Redis
+├── migrations/                 # golang-migrate SQL migration files
 ├── keys/                       # RSA key pair for JWT signing/verification
 ├── Dockerfile                  # Multi-stage production build (alpine)
 └── Dockerfile.dev              # Development build with Air hot reload
@@ -49,15 +52,17 @@ user-service/
 | POST | `/login` | No | Authenticate and receive JWT tokens |
 | POST | `/refresh` | No | Exchange refresh token for new access token |
 | POST | `/logout` | Yes | Blacklist access token, revoke refresh tokens |
-| GET | `/verify-email` | No | Verify email address via token from registration email |
-| POST | `/resend-verification` | No | Re-send the verification email |
+| POST | `/verify-email` | No | Verify email with the 6-digit code sent at registration |
+| POST | `/resend-verification` | No | Re-send the verification code (60 s cooldown) |
+| POST | `/forgot-password` | No | Send a password-reset link via email (30 min token, 60 s cooldown) |
+| POST | `/reset-password` | No | Set a new password using a reset token |
 
 ### User Management — `/api/v1/users`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/:id` | Internal | Get user by ID (service-to-service only) |
-| GET | `/:id/seller-profile` | No | Public seller profile — name, joined date (used by seller shop page) |
+| GET | `/:id` | Internal | Get user by ID (service-to-service, Docker-internal only) |
+| GET | `/sellers/:id` | No | Public seller profile — name, avatar, join date (used by seller shop page) |
 | GET | `/profile` | Yes | Get current user's profile |
 | PUT | `/profile` | Yes | Update profile (invalidates session cache) |
 | POST | `/addresses` | Yes | Create a new address |
@@ -69,22 +74,20 @@ user-service/
 
 ```
 POST /login
-  → 1. Redis pre-check (login_attempts:{email} ≥ 5 → reject immediately)
-  → 2. SELECT user by email, submit password to bcrypt worker pool
-       · Worker pool: runtime.NumCPU() goroutines; pool full → 503 + Retry-After: 1
-       · Increment or reset login_attempts:{email} in Redis (TX always commits)
-  → 3. On success:
-       · RS256 JWT access token (15 min TTL, includes jti)
-       · 128-char hex refresh token (stored as SHA-256 hash in auth_tokens)
-       · Cache session in Redis (session:{userID}, 30 min)
-       · Clear login_attempts:{email}
+  → 1. Redis pre-check — login_attempts:{email} ≥ 5 → 403 (no DB hit)
+  → 2. Plain DB read (no transaction, no FOR UPDATE) — fetch user + profile
+  → 3. Bcrypt verify via bounded worker pool (runtime.NumCPU() goroutines)
+       · Pool full → 503 + Retry-After: 1
+       · Bad password → Redis INCR login_attempts:{email}
+  → 4. Small TX (success only) — INSERT auth_tokens (refresh token hash)
+  → 5. Post-success — Redis DEL login_attempts:{email} + SET session:{userID}
 ```
 
-Login-attempt tracking is Redis-only — no `SELECT ... FOR UPDATE` row lock on login.
+Login-attempt tracking is Redis-only — no `SELECT ... FOR UPDATE` on login.
 
 **Access token:** RS256 JWT, 15 min TTL, contains `jti` for blacklisting.
 **Refresh token:** 128-char random hex, stored as SHA-256 hash in `auth_tokens`.
-**Logout:** blacklists the `jti` in Redis (TTL = remaining token lifetime), deletes session cache, revokes all refresh tokens.
+**Logout:** blacklists the `jti` in Redis (TTL = remaining token lifetime), deletes session cache, revokes all refresh tokens for that user.
 
 ## Redis Usage
 
@@ -93,6 +96,12 @@ Login-attempt tracking is Redis-only — no `SELECT ... FOR UPDATE` row lock on 
 | `session:{userID}` | Cached user profile (JSON) | 30 min |
 | `blacklist:{jti}` | Revoked JWT access tokens | Remaining token lifetime |
 | `login_attempts:{email}` | Failed login counter | 15 min sliding window |
+| `verification:{email}` | Email verification code | 15 min |
+| `verification_cooldown:{email}` | Resend cooldown gate | 60 s |
+| `verification_attempts:{email}` | Verify brute-force counter | 15 min |
+| `password_reset:{email}` | Password-reset token | 30 min |
+| `password_reset_cooldown:{email}` | Reset-request cooldown gate | 60 s |
+| `password_reset_attempts:{email}` | Reset brute-force counter | 30 min |
 
 ## Database
 
@@ -105,7 +114,7 @@ Login-attempt tracking is Redis-only — no `SELECT ... FOR UPDATE` row lock on 
 | `user_addresses` | Street, city, state, zip, default flag — FK to users |
 | `auth_tokens` | SHA-256 hashed refresh tokens, expiry, revoked flag |
 
-Connection pool: 25 max open, 5 idle, 5 min max lifetime. Schema auto-migrated by GORM at startup.
+Connection pool: 50 max open, 10 idle, 5 min max lifetime. Schema managed by `golang-migrate` SQL migrations (`migrations/`); runs automatically at startup.
 
 ## Environment Variables
 
@@ -156,13 +165,13 @@ go test -tags=integration -v -race ./internal/integration/
 ```
 
 Notable integration tests:
-- `TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass` — 10 goroutines at `attempts=4`; proves Redis-based attempt counter serializes correctly, no goroutine bypasses the 5-attempt gate
+- `TestConcurrentLogin_SelectForUpdate_PreventsLockoutBypass` — 10 goroutines at `attempts=4`; proves the Redis INCR counter prevents any goroutine from bypassing the 5-attempt gate
 - `TestAttemptCounter`, `TestJWTMiddleware_*` — Redis-backed attempt counter and token validation
 
 ## Tech Stack
 
 - **Go** with Gin (HTTP) and GORM (ORM)
-- **PostgreSQL** — persistent storage with pessimistic locking on login
+- **PostgreSQL** — persistent storage; login uses no row lock (Redis-authoritative attempt counter)
 - **Redis** — session cache, JWT blacklist, login attempt rate limiting
 - **JWT RS256** — stateless auth with `jti`-based revocation
 - **testify** — unit testing; integration tests use real databases

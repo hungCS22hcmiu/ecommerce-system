@@ -6,45 +6,45 @@ This document describes how the five microservices of the e-commerce platform in
 
 ## Architecture Overview
 
-```mermaid
-graph TD
-    Client([Browser / API Client])
-    FE[frontend :3001]
-    NGX[Nginx :80]
-    US[user-service :8001]
-    PS[product-service :8081]
-    CS[cart-service :8002]
-    OS[order-service :8082]
-    PAY[payment-service :8003]
-    AI[ai-service :9000\ninternal only]
-    KAFKA[(Kafka)]
-    PG[(PostgreSQL)]
-    RDS[(Redis)]
+```
+                              ┌──────────────────────────────────────┐
+                              │         Browser / API Client          │
+                              └──────────────────┬───────────────────┘
+                                                 │ HTTP :80
+               ┌─────────────────────────────────▼──────────────────────────────────┐
+               │                      Nginx Reverse Proxy :80                        │
+               │          Rate Limit · CORS · Security Headers · DNS                 │
+               └──┬──────────┬─────────────┬─────────────┬──────────┬───────────────┘
+                  │          │             │             │          │        SPA
+              /auth       /products     /cart        /orders    /payments  catch-all
+              /users      /inv,/cat
+                  │          │             │             │          │            │
+          ┌───────▼──┐  ┌────▼──────┐  ┌──▼───────┐  ┌──▼───────┐  ┌▼───────┐  ┌▼──────┐
+          │ user-svc │  │product-svc│  │ cart-svc │  │order-svc │  │pay-svc │  │  FE   │
+          │ Go :8001 │  │Java :8081 │  │ Go :8002 │  │Java :8082│  │Go:8003 │  │React19│
+          └──────────┘  └─────┬─────┘  └────┬─────┘  └─────┬────┘  └────────┘  │:3000  │
+                              │◄────────────┘               │                   └───────┘
+                              │  GET /products/:id           │
+                              │◄──────────────────────────────  (reserve / release / GET)
+                              │───────────────────────────────► (notifications / verify)
+                              │                              │ orders.created (via outbox)
+                       ┌──────┤ GET /embed                  ├──────────────────────────────►
+                       │  AI  │ (search + async embed)   ┌──┴───────────────────────────────┐
+                       │  svc │                           │          Apache Kafka             │
+                       │  Py  │                           │  orders.created   → pay-svc      │
+                       │ :9000│                           │  payments.completed ← pay-svc    │
+                       │(int.)│                           │  payments.failed    ← pay-svc    │
+                       └──────┘                           │  payments.dlq  (dead letter)     │
+                                                          └──────────────────────────────────┘
 
-    Client -->|HTTP| NGX
-    NGX -->|SPA catch-all| FE
-    NGX -->|/api/v1/auth, /users| US
-    NGX -->|/api/v1/products, /inventory, /categories| PS
-    NGX -->|/api/v1/cart| CS
-    NGX -->|/api/v1/orders| OS
-    NGX -->|/api/v1/payments| PAY
-
-    CS -->|GET /products/:id| PS
-    OS -->|POST /inventory/:id/reserve| PS
-    OS -->|POST /inventory/:id/release| PS
-    OS -->|GET /products/:id| PS
-    PS -->|POST /embed| AI
-    PS -->|POST /notifications/internal/review| OS
-    PS -->|GET /purchase-verification| OS
-
-    OS -->|orders.created\n(via outbox)| KAFKA
-    KAFKA -->|orders.created| PAY
-    PAY -->|payments.completed| KAFKA
-    PAY -->|payments.failed| KAFKA
-    KAFKA -->|payments.completed / failed| OS
-
-    US & CS & OS & PAY --- PG
-    US & CS & PS --- RDS
+          ┌──────────────────────────────────────┐    ┌──────────────────────────────────────────┐
+          │    PostgreSQL 15+  (pgvector)         │    │                 Redis 7+                  │
+          │    ecommerce_users                    │    │  user-svc:  session · blacklist · OTP     │
+          │    ecommerce_products                 │    │  cart-svc:  cart · product-validation     │
+          │    ecommerce_carts                    │    │  product-svc: product & search cache      │
+          │    ecommerce_orders                   │    └──────────────────────────────────────────┘
+          │    ecommerce_payments                 │
+          └──────────────────────────────────────┘
 ```
 
 ---
@@ -159,106 +159,118 @@ The order-to-payment flow is a choreography saga — no central orchestrator. Ea
 
 ### Event-Driven Architecture
 
-```mermaid
-flowchart LR
-    subgraph Producers
-        OS["order-service\n(Java/Spring Boot)"]
-        PAY["payment-service\n(Go)"]
-    end
-
-    subgraph Kafka Broker["Kafka Broker (kafka:29092)"]
-        direction TB
-        T1[["orders.created\n3 partitions\nkey = orderId"]]
-        T2[["payments.completed\n3 partitions"]]
-        T3[["payments.failed\n3 partitions"]]
-        T4[["payments.dlq\n(dead letter queue)"]]
-    end
-
-    subgraph Consumers
-        PAY2["payment-service\ngroup: payment-service\nworker pool: 5 goroutines\noffset: manual commit"]
-        OS2["order-service\nSpring Kafka listener\n@KafkaListener"]
-    end
-
-    subgraph GW["Payment Gateway"]
-        MOCK["mock gateway\n90% success rate"]
-    end
-
-    OS -->|"publish\nOrderCreatedEvent"| T1
-    T1 -->|"consume\nStartOffset=earliest"| PAY2
-    PAY2 --> MOCK
-
-    MOCK -->|"success"| PAY
-    MOCK -->|"ErrGatewayDeclined"| PAY
-
-    PAY -->|"PaymentCompletedEvent\n__TypeId__ header"| T2
-    PAY -->|"PaymentFailedEvent\n__TypeId__ header"| T3
-    PAY -->|"deserialize error\nor retry exhaustion"| T4
-
-    T2 -->|"onPaymentCompleted()\nPENDING → CONFIRMED"| OS2
-    T3 -->|"onPaymentFailed()\nPENDING → CANCELLED\n+ release stock"| OS2
-
-    style T1 fill:#f5a623,color:#000
-    style T2 fill:#7ed321,color:#000
-    style T3 fill:#d0021b,color:#fff
-    style T4 fill:#9b9b9b,color:#fff
-    style MOCK fill:#4a90e2,color:#fff
+```
+ ┌─────────────────┐                ┌───────────────────────────────────────────────────┐
+ │  order-service  │                │                  Apache Kafka (kafka:29092)        │
+ │  Java/Spring    │──publish──────►│                                                   │
+ │  (via outbox)   │                │  orders.created    3 partitions · key = orderId   │
+ └─────────────────┘                └────────────────────────────┬──────────────────────┘
+                                                                 │ consume
+                                                                 │ group: payment-service
+                                                                 │ StartOffset: earliest
+                                                      ┌──────────▼──────────────────────┐
+                                                      │         payment-service           │
+                                                      │         Go                        │
+                                                      │         5 worker goroutines       │
+                                                      │         manual offset commit      │
+                                                      └──────────┬──────────────────────┘
+                                                                 │
+                                                      ┌──────────▼──────────────┐
+                                                      │      Mock Gateway        │
+                                                      │      90% success         │
+                                                      │      10% decline         │
+                                                      └──────────┬──────────────┘
+                                                                 │ success / ErrGatewayDeclined
+                                                                 │ __TypeId__ header for Spring
+                ┌────────────────────────────────────────────────▼──────────────────────────┐
+                │                              Apache Kafka                                   │
+                │  payments.completed  3 partitions ────────────────────────────────────────►│
+                │  payments.failed     3 partitions ────────────────────────────────────────►│
+                │  payments.dlq        1 partition  (dead letter: poison pill / exhaustion) ►│
+                └────────────────────────────────────────────────┬──────────────────────────┘
+                                                                 │ consume · @KafkaListener
+                                                      ┌──────────▼──────────────────────┐
+                                                      │         order-service             │
+                                                      │         Java / Spring Kafka       │
+                                                      │                                   │
+                                                      │  payments.completed →             │
+                                                      │    PENDING → CONFIRMED            │
+                                                      │  payments.failed →                │
+                                                      │    PENDING → CANCELLED            │
+                                                      │    + release stock (@Async)       │
+                                                      └───────────────────────────────────┘
 ```
 
 ### Retry & DLQ Routing
 
-```mermaid
-flowchart TD
-    MSG[Kafka message received] --> DS{Deserializable?}
-    DS -->|No - poison pill| DLQ["payments.dlq\nerrorStage: deserialize"]
-    DS -->|Yes| PP[ProcessPayment]
-    PP --> ERR{Error type?}
-    ERR -->|ErrGatewayDeclined\npermanent| FAIL["publish payments.failed\nno retry, no DLQ"]
-    ERR -->|transient\nDB / timeout| R1[retry attempt 1\nwait 100ms]
-    R1 --> R2[retry attempt 2\nwait 200ms]
-    R2 --> R3[retry attempt 3\nwait 400ms]
-    R3 -->|still failing| DLQ2["payments.dlq\nerrorStage: process\nattempts: 3"]
-    ERR -->|nil - success| DONE["publish payments.completed\ncommit offset"]
-    FAIL --> COMMIT[commit offset]
-    DLQ --> COMMIT
-    DLQ2 --> COMMIT
-    DONE --> COMMIT
-
-    style DLQ fill:#9b9b9b,color:#fff
-    style DLQ2 fill:#9b9b9b,color:#fff
-    style FAIL fill:#d0021b,color:#fff
-    style DONE fill:#7ed321,color:#000
+```
+              ┌─────────────────────────────────┐
+              │      Kafka message received       │
+              └────────────────┬────────────────┘
+                               │
+                        Deserializable?
+                   ┌───────────┴──────────────┐
+                  No                         Yes
+                   │                          │
+                   ▼                          ▼
+         ┌──────────────────┐       ┌──────────────────┐
+         │  → payments.dlq  │       │   ProcessPayment  │
+         │  errorStage:     │       └────────┬─────────┘
+         │  deserialize     │                │
+         │  commit offset   │           Error type?
+         └──────────────────┘    ┌──────────┼───────────────────┐
+                                 │          │                   │
+                         Gateway       Transient            Success
+                         Declined    (DB / timeout)             │
+                             │              │                   │
+                             ▼              ▼                   ▼
+                   ┌──────────────┐    retry ×3        ┌──────────────────┐
+                   │ → payments   │    100ms            │ → payments       │
+                   │   .failed    │    200ms            │   .completed     │
+                   │ no DLQ       │    400ms backoff    │ commit offset    │
+                   │ commit offset│         │           └──────────────────┘
+                   └──────────────┘         │ exhausted
+                                            ▼
+                                   ┌──────────────────┐
+                                   │  → payments.dlq  │
+                                   │  errorStage:     │
+                                   │  process         │
+                                   │  attempts: 3     │
+                                   │  commit offset   │
+                                   └──────────────────┘
 ```
 
 ### Saga Sequence
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant OrderService
-    participant Kafka
-    participant PaymentService
-
-    Client->>OrderService: POST /api/v1/orders
-    OrderService->>ProductService: reserve stock (parallel HTTP)
-    OrderService->>OrderService: persist order (status=PENDING) + outbox row (atomic)
-    Note right of OrderService: OutboxPublisher polls every 100ms<br/>SELECT ... FOR UPDATE SKIP LOCKED
-    OrderService->>Kafka: publish orders.created (OutboxPublisher)
-    Note right of Kafka: topic: orders.created
-
-    Kafka->>PaymentService: orders.created event
-    PaymentService->>PaymentService: ProcessPayment (idempotency check)
-    PaymentService->>PaymentGateway: charge (mock, 90% success)
-
-    alt Payment succeeds
-        PaymentService->>Kafka: publish payments.completed
-        Kafka->>OrderService: payments.completed event
-        OrderService->>OrderService: update status PENDING → CONFIRMED
-    else Payment fails
-        PaymentService->>Kafka: publish payments.failed
-        Kafka->>OrderService: payments.failed event
-        OrderService->>OrderService: update status PENDING → CANCELLED
-        OrderService->>ProductService: release stock
-    end
+```
+  Client        OrderService     ProductService       Kafka          PaymentService
+    │                 │                │               │                  │
+    │─POST /orders───►│                │               │                  │
+    │                 │─reserve stock──►               │                  │
+    │                 │  (parallel,    │               │                  │
+    │                 │   per item)    │               │                  │
+    │                 │◄───────────────│               │                  │
+    │                 │                │               │                  │
+    │   [atomic TX: persist order (status=PENDING) + outbox row]          │
+    │                 │                │               │                  │
+    │   [OutboxPublisher polls every 100ms — SELECT … FOR UPDATE SKIP LOCKED]
+    │                 │──orders.created───────────────►│                  │
+    │◄─201 Created────│                │               │                  │
+    │                 │                │               │──orders.created──►│
+    │                 │                │               │                  │──charge──► Mock GW
+    │                 │                │               │                  │◄─result──
+    │                 │                │               │                  │
+    │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Payment succeeds ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+    │                 │                │               │◄─payments.completed
+    │                 │◄─payments.completed────────────│                  │
+    │                 │  PENDING → CONFIRMED            │                  │
+    │                 │                │               │                  │
+    │  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ Payment fails ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+    │                 │                │               │◄─payments.failed──│
+    │                 │◄─payments.failed───────────────│                  │
+    │                 │  PENDING → CANCELLED            │                  │
+    │                 │─release stock──►               │                  │
+    │                 │  (@Async, @Retryable 3×)       │                  │
 ```
 
 ### 2.1 Topic: `orders.created`
@@ -404,15 +416,19 @@ sequenceDiagram
 
 Nginx is the single entry point on port `80`. All inter-service HTTP happens on the internal Docker network; services are not directly exposed in production.
 
-```mermaid
-graph LR
-    Client -->|:80| NGX[Nginx]
-    NGX -->|8001| US[user-service]
-    NGX -->|8081| PS[product-service]
-    NGX -->|8002| CS[cart-service]
-    NGX -->|8082| OS[order-service]
-    NGX -->|8003| PAY[payment-service]
-    NGX -->|3000| FE[frontend]
+```
+                              ┌────────────────────────────┐
+                              │         Nginx :80           │
+                              └─────────────┬──────────────┘
+                                            │
+   ┌──────────┬────────────┬────────────────┼──────────────┬───────────┬────────────┐
+   │          │            │                │              │           │            │
+/auth      /products    /cart           /orders        /payments      /          /health
+/users     /inv,/cat                                               (SPA)
+   │          │            │                │              │           │            │
+   ▼          ▼            ▼                ▼              ▼           ▼            ▼
+user-svc  product-svc  cart-svc        order-svc       pay-svc    frontend      pay-svc
+:8001      :8081         :8002           :8082           :8003      :3000         :8003
 ```
 
 ### Route Table

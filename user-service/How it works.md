@@ -23,7 +23,7 @@ The `user-service` is a Go microservice (Gin + GORM) that owns **identity and ac
 ### In this project
 - Every protected endpoint across all 5 services is gated by JWT claims forwarded from this service.
 - The session cache (`session:{userID}`) means product-service and cart-service can read user profile without hitting this service's DB on every request.
-- The pessimistic lock on login (`SELECT FOR UPDATE`) is critical — without it, two concurrent login requests can both read `FailedLoginAttempts = 4`, both increment to 5, but only one actually locks the account in DB.
+- The Redis-authoritative login attempt counter (`login_attempts:{email}`) is what prevents brute-force bypass — the DB columns `failed_login_attempts` / `is_locked` are schema artifacts from an earlier design and are no longer written at login time.
 
 ### In real-world systems
 - Auth services are the highest-value attack surface. Getting brute-force protection, token storage, and revocation wrong causes account takeovers.
@@ -50,28 +50,30 @@ POST /api/v1/auth/register
 ```
 POST /api/v1/auth/login
     │
-    ├─ [FAST PATH] Redis pre-check: login_attempts:{email} >= 5 → 423 Locked
+    ├─ 1. Redis pre-check: login_attempts:{email} >= 5 → 403 Locked (no DB hit)
     │
-    ├─ BEGIN TRANSACTION
-    │   ├─ SELECT * FROM users WHERE email=? FOR UPDATE  ← pessimistic lock
-    │   ├─ user not found → loginErr=ErrInvalidCredentials, COMMIT (no-op)
-    │   ├─ user.IsLocked → loginErr=ErrAccountLocked, COMMIT
-    │   ├─ bcrypt.Compare fails:
-    │   │   ├─ UPDATE failed_login_attempts++, is_locked=(attempts>=5)
-    │   │   └─ COMMIT  ← counter persists even on auth failure
-    │   └─ password OK:
-    │       ├─ UPDATE failed_login_attempts=0, is_locked=false
-    │       ├─ Check is_verified (else ErrEmailNotVerified, COMMIT)
-    │       ├─ GenerateAccessToken (RS256 JWT, jti=UUID, TTL=15min)
-    │       ├─ GenerateRefreshToken (128-char hex, opaque)
-    │       ├─ INSERT auth_tokens (SHA-256 hash of refresh token)
-    │       └─ COMMIT
+    ├─ 2. Plain DB read (no transaction, no FOR UPDATE)
+    │       SELECT * FROM users WHERE email=? (with profile join)
+    │       user not found → ErrInvalidCredentials
     │
-    ├─ [POST-TX] bad password → Redis INCR login_attempts:{email}
-    └─ [POST-TX] success → Redis DEL counter + SET session:{userID}
+    ├─ 3. Bcrypt verify via worker pool (outside any DB lock)
+    │       Pool full → 503 + Retry-After: 1
+    │       Mismatch → Redis INCR login_attempts:{email} (best-effort)
+    │               → ErrInvalidCredentials
+    │       Check is_verified → ErrEmailNotVerified if false
+    │
+    ├─ 4. Small TX (success path only)
+    │       GenerateAccessToken (RS256 JWT, jti=UUID, TTL=15min)
+    │       GenerateRefreshToken (128-char hex, opaque)
+    │       INSERT auth_tokens (SHA-256 hash of refresh token)
+    │       COMMIT
+    │
+    └─ 5. Post-success Redis updates
+            DEL login_attempts:{email}
+            SET session:{userID} (JSON profile, 30 min TTL)
 ```
 
-**Why TX always commits on auth errors:** If the TX rolled back on wrong password, the `UpdateLoginAttempts` write would be lost, making brute-force protection impossible. Auth errors are stored in an outer `loginErr` variable returned after the TX.
+**Why login attempt tracking is Redis-only:** The attempt counter (`INCR login_attempts:{email}`) is a best-effort operation outside any DB transaction. A Redis failure on increment is logged but never surfaces to the caller — it's intentionally fire-and-forget. This eliminates any DB row lock held during bcrypt (which takes 100ms+), avoiding serialization of concurrent login attempts for the same account. The Redis pre-check at step 1 is the enforcement gate; the counter increment at step 3 is the write.
 
 ### Token Refresh
 ```
@@ -91,6 +93,29 @@ POST /api/v1/auth/logout  (Authorization: Bearer <access>)
     ├─ Redis SET blacklist:{jti} = "" TTL = remaining token lifetime
     ├─ Redis DEL session:{userID}
     └─ UPDATE auth_tokens SET revoked=true WHERE user_id=?
+```
+
+### Forgot Password
+```
+POST /api/v1/auth/forgot-password  (body: email)
+    │
+    ├─ Redis HasCooldown(password_reset_cooldown:{email}) → 429 if set
+    ├─ FindByEmail → not found → return nil (no enumeration leak)
+    ├─ GenerateRefreshToken() as reset token (128-char hex, opaque)
+    ├─ Redis SET password_reset:{email} = token   TTL=30min
+    ├─ Redis SET password_reset_cooldown:{email}  TTL=60s
+    └─ emailSender.SendPasswordReset (async best-effort)
+```
+
+### Reset Password
+```
+POST /api/v1/auth/reset-password  (body: email, token, new_password)
+    │
+    ├─ Redis INCR password_reset_attempts:{email} > 5 → 429
+    ├─ Redis GET password_reset:{email} → mismatch or empty → 400
+    ├─ FindByEmail → hash new password (bcrypt) → UpdatePassword
+    ├─ Redis DEL password_reset:{email} + attempts key
+    └─ RevokeByUserID → forces re-login on all devices
 ```
 
 ### Request Authentication (middleware)
@@ -126,11 +151,12 @@ Every protected request
               ┌─────▼──────┐                  ┌──────▼──────┐        ┌──────▼──────┐
               │ PostgreSQL  │                  │    Redis     │        │    SMTP     │
               │             │                  │              │        │             │
-              │ users        │                  │ session:{id} │        │ verify email│
-              │ user_profiles│                  │ blacklist:{jti}│      │             │
-              │ user_addresses│                 │ login_attempts│       └─────────────┘
-              │ auth_tokens  │                  │ verification: │
-              └─────────────┘                  └──────────────┘
+              │ users        │                  │ session:{id}            │        │ verify email│
+              │ user_profiles│                  │ blacklist:{jti}         │        │ reset link  │
+              │ user_addresses│                 │ login_attempts:{email}  │        └─────────────┘
+              │ auth_tokens  │                  │ verification:{email}    │
+              └─────────────┘                  │ password_reset:{email}  │
+                                               └─────────────────────────┘
 ```
 
 ### Key packages
@@ -141,9 +167,10 @@ Every protected request
 | `pkg/blacklist` | Redis `blacklist:{jti}` — O(1) revocation check |
 | `pkg/session` | Redis `session:{userID}` — JSON-marshaled UserResponse, 30 min TTL |
 | `pkg/loginattempt` | Redis `login_attempts:{email}` — sliding 15 min TTL counter |
-| `pkg/verification` | Redis verification code + attempt tracking + 60s resend cooldown |
-| `pkg/password` | bcrypt Hash/Compare wrapper |
-| `pkg/email` | SMTP STARTTLS sender |
+| `pkg/verification` | Redis verification code + attempt tracking + 60 s resend cooldown |
+| `pkg/reset` | Redis password-reset tokens + attempt tracking + 60 s cooldown |
+| `pkg/password` | bcrypt Hash/Compare + bounded worker pool (`runtime.NumCPU()` goroutines) |
+| `pkg/email` | SMTP STARTTLS sender (verification codes + reset links) |
 | `internal/repository` | GORM implementations behind interfaces → testable |
 | `internal/service` | Business logic, depends only on interfaces |
 | `internal/handler` | HTTP layer, parses/validates DTOs, delegates to service |
@@ -159,42 +186,59 @@ users
   is_locked BOOL DEFAULT false
   failed_login_attempts INT DEFAULT 0
   is_verified BOOL DEFAULT false
+  verified_at TIMESTAMPTZ
+  deleted_at TIMESTAMPTZ  ← soft-delete
 
 user_profiles (1:1 with users)
   user_id UUID FK
   first_name, last_name, phone, avatar_url
 
+user_addresses (1:many with users)
+  user_id UUID FK
+  label VARCHAR       ← e.g. "Home", "Work"
+  address_line1/2, city, state, country, postal_code
+  is_default BOOL
+
 auth_tokens (refresh tokens)
   id UUID PK
   user_id UUID FK
-  refresh_token_hash VARCHAR  ← SHA-256, never stores raw token
+  refresh_token_hash VARCHAR UNIQUE  ← SHA-256, never stores raw token
   expires_at TIMESTAMPTZ
-  is_revoked BOOL
+  revoked BOOL
 ```
 
 ---
 
 ## 5. Code Examples
 
-### The TX-always-commits login pattern
+### Redis-only login attempt counter + bcrypt pool
 ```go
-// auth_service.go:170
-txErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-    user, err := s.userRepo.FindByEmailForUpdate(ctx, tx, req.Email)
-    if errors.Is(err, repository.ErrNotFound) {
-        loginErr = ErrInvalidCredentials
-        return nil // ← COMMIT the no-op TX, not rollback
-    }
+// auth_service.go — Login()
 
-    if !password.Compare(user.PasswordHash, req.Password) {
-        s.userRepo.UpdateLoginAttempts(ctx, tx, user.ID, newAttempts, locked)
-        loginErr = ErrInvalidCredentials
-        return nil // ← COMMIT so counter write persists
-    }
-    // ... generate tokens ...
-    return nil // ← COMMIT with tokens
+// 1. Fast gate: no DB hit for locked accounts
+if count, _ := s.attemptCounter.Get(ctx, req.Email); count >= maxLoginAttempts {
+    return nil, ErrAccountLocked
+}
+
+// 2. Plain read — no FOR UPDATE, no transaction
+user, err := s.userRepo.FindByEmailWithProfile(ctx, req.Email)
+
+// 3. Bcrypt outside any lock — pool caps goroutine saturation
+verifyErr = s.bcryptPool.Verify(ctx, user.PasswordHash, req.Password)
+if verifyErr != nil {
+    s.attemptCounter.Increment(ctx, req.Email) // best-effort Redis INCR
+    return nil, ErrInvalidCredentials
+}
+
+// 4. Small TX: only token persistence, not attempt tracking
+s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+    // INSERT auth_tokens (SHA-256 hash of rawRefresh)
+    return s.authTokenRepo.Create(ctx, tx, authToken)
 })
-// loginErr checked AFTER tx — real DB errors are the only rollbacks
+
+// 5. Post-success: clear counter + warm session cache
+s.attemptCounter.Delete(ctx, req.Email)
+s.sessionCache.Set(ctx, userID, resp.User, sessionTTL)
 ```
 
 ### JWT middleware blacklist check
@@ -224,15 +268,23 @@ authToken := &model.AuthToken{
 
 ## 6. Trade-offs
 
-### Pessimistic lock on login (`SELECT FOR UPDATE`)
+### Redis-only login attempt counter (no `SELECT FOR UPDATE`)
 
 | Pro | Con |
 |---|---|
-| Correctness guaranteed — only one TX reads + increments at a time | Serializes concurrent login attempts for same email |
-| Prevents TOCTOU race on account lockout | Holds DB row lock for duration of bcrypt (100ms+) |
-| Simple to reason about | Doesn't scale if the same account is hit from many IPs simultaneously |
+| No DB row lock held during 100ms+ bcrypt — no serialization | Redis failure silently drops an increment (best-effort) |
+| Horizontal scale: any instance reads/writes the same Redis counter | INCR is not atomic with the DB read — theoretical double-count at the boundary |
+| O(1) and non-blocking for the common case | `failed_login_attempts` / `is_locked` DB columns are no longer authoritative |
 
-**Mitigation:** Redis pre-check at the top of `Login()` short-circuits before the DB even for the common case (already locked), reducing lock contention.
+**Why this is acceptable:** The lockout threshold (5 attempts) has enough slack that an occasional missed increment doesn't create a meaningful bypass window. Redis availability (99.9%+) makes the failure mode rare, and the bcrypt cost already throttles attackers without a hard lock.
+
+### Bcrypt worker pool
+
+| Pro | Con |
+|---|---|
+| Caps CPU saturation — bcrypt can't spawn unbounded goroutines | Queue size (256) is a config knob; wrong value = too-early 503s or OOM |
+| Clean load shedding: queue full → immediate 503 + `Retry-After: 1` | Pool starts cold — first `runtime.NumCPU()` requests warm it |
+| Workers drain on graceful shutdown (pool.Stop() called after srv.Shutdown) | Adds one goroutine-hop latency per login |
 
 ### Short-lived access tokens (15 min)
 
@@ -255,12 +307,13 @@ authToken := &model.AuthToken{
 ## 7. When to Use / Avoid
 
 ### Use this pattern when:
-- You need **account lockout** correctness under concurrent load — pessimistic locking is the right call
+- You need **account lockout** and can tolerate best-effort counter semantics — Redis INCR is sufficient for most threat models
 - Your access token TTL is short enough that a Redis blacklist is practical (entries expire naturally)
 - Services consuming identity are deployed on the same internal network and can trust forwarded headers from a trusted gateway
+- Login volumes are high and you cannot afford to hold a DB row lock for the duration of bcrypt
 
 ### Avoid when:
-- **Very high login throughput for the same account** — the `FOR UPDATE` lock will serialize all attempts; consider a Redis-only counter approach (INCR + EXPIRE) if lockout precision matters less than throughput
+- **Lockout precision is a hard security requirement** — if even one missed increment is unacceptable (e.g., financial systems), back the counter with a DB write inside a transaction
 - **Microservices span trust boundaries** — forwarding `X-Seller-Id` without signature works only inside a private network; add HMAC or mTLS if services span zones
 - **You need refresh token rotation** — current implementation reuses the same refresh token; for higher security (e.g., refresh token families), rotate on every use and revoke the family on replay detection
 
@@ -268,11 +321,11 @@ authToken := &model.AuthToken{
 
 ## 8. Interview Insights
 
-### Q: Why use `SELECT FOR UPDATE` on login instead of an optimistic approach?
-**A:** Login is write-heavy for failed attempts. With optimistic locking you'd need a version field, and retries on concurrent failures would mean some login attempts never update the counter at all — breaking lockout semantics. Pessimistic lock gives a simple guarantee: at most one writer at a time per user row. The tradeoff is serialization on that row, acceptable because the common case (successful login from a single user) has no contention.
+### Q: Why is login attempt tracking Redis-only instead of a DB transaction?
+**A:** The original design used `SELECT FOR UPDATE` to serialize concurrent logins and guarantee the attempt counter incremented correctly. It was replaced because bcrypt takes 100ms+, and holding a DB row lock for that duration serializes every login attempt for the same email — unacceptable under load. The Redis `INCR` approach is O(1) and non-blocking. The tradeoff: Redis `INCR` is best-effort — a Redis failure silently drops an increment. For most systems this is acceptable because: (1) the lockout threshold (5 attempts) has enough slack, and (2) bcrypt itself already throttles attackers without a hard lock.
 
-### Q: Why does the transaction commit even on wrong password?
-**A:** The `UpdateLoginAttempts` write must persist to enforce brute-force lockout. If we returned an error from the TX callback, GORM would roll back and the counter increment would be lost. The pattern: store auth errors in an outer variable (`loginErr`), always `return nil` from the TX callback for auth failures, only `return err` for real DB errors. The outer caller checks `loginErr` after the TX.
+### Q: Why is there a bcrypt worker pool instead of calling bcrypt directly?
+**A:** `bcrypt.CompareHashAndPassword` is CPU-bound and takes ~100ms at cost 10. Without a pool, a burst of login requests would spawn an unbounded number of goroutines each saturating a CPU core, potentially starving the rest of the server. The pool (`runtime.NumCPU()` workers, queue 256) caps concurrent bcrypt ops to the number of CPU cores. When the queue is full, new requests get an immediate 503 + `Retry-After: 1` rather than piling up and exhausting memory.
 
 ### Q: How does logout work if JWTs are stateless?
 **A:** Stateless means we can't "delete" a token. Instead, we maintain a **blacklist** in Redis: on logout, the token's `jti` (a UUID in the claims) is added with TTL = remaining lifetime. The auth middleware checks this on every request. Since access tokens are only 15 minutes, the Redis key auto-expires and the blacklist stays small.
@@ -283,9 +336,9 @@ authToken := &model.AuthToken{
 ### Q: How would you scale this if login becomes a bottleneck?
 **A:** Several levers:
 1. **Read replicas** — Refresh (profile lookup on cache miss) can go to a read replica.
-2. **Connection pool tuning** — Already configured (25 max open, 5 idle, 5 min lifetime).
-3. **Redis counter instead of DB lock for attempt tracking** — Sacrifice perfect precision for throughput; Redis INCR is O(1) and non-blocking.
-4. **Horizontal scaling** — Stateless JWT verification means any instance can validate tokens without coordination. Session cache in Redis is already shared. Only login (writes) are sticky to the DB primary.
+2. **Connection pool tuning** — Already configured (50 max open, 10 idle, 5 min lifetime). Can increase if DB can handle more connections.
+3. **Bcrypt pool sizing** — Increase `NewPool(queueSize)` and consider more workers if CPU allows; or lower `BCRYPT_COST` in dev/test.
+4. **Horizontal scaling** — Stateless JWT verification means any instance can validate tokens without coordination. Session cache and attempt counter in Redis are already shared. Only login (DB writes for refresh token) are sticky to the DB primary.
 
 ### Q: What's the difference between `session cache` and `blacklist`?
 **A:** They serve opposite purposes:

@@ -64,6 +64,73 @@ payment-service ──kafka───▶  payments.completed/failed  ──▶  o
 
 **AI Search:** `ai-service` runs `all-MiniLM-L6-v2` (384 dims) locally. Products are embedded on create/update (write-through) and searchable via cosine similarity with pgvector.
 
+## Project Structure
+
+```
+ecommerce-system/
+├── ai-service/                  # Python FastAPI — sentence-transformers embedding sidecar
+│   ├── main.py
+│   ├── scripts/embed_products.py
+│   ├── tests/
+│   └── Dockerfile
+├── cart-service/                # Go (Gin + GORM) — Redis-first cart
+│   ├── cmd/server/
+│   ├── internal/                # handler · service · repository · cache · client · dto · model
+│   ├── pkg/                     # jwt · response
+│   ├── migrations/
+│   └── Dockerfile
+├── order-service/               # Java/Spring Boot — orders, outbox, notifications
+│   ├── src/main/
+│   ├── src/test/
+│   └── Dockerfile
+├── payment-service/             # Go (Gin) — Kafka saga, idempotency
+│   ├── cmd/server/
+│   ├── internal/                # handler · service · repository · kafka · gateway · dto · model
+│   ├── pkg/                     # jwt · response
+│   ├── migrations/
+│   └── Dockerfile
+├── product-service/             # Java/Spring Boot — catalog, AI search, reviews
+│   ├── src/main/
+│   ├── src/test/
+│   └── Dockerfile
+├── user-service/                # Go (Gin + GORM) — auth, profiles
+│   ├── cmd/server/
+│   ├── internal/                # handler · service · repository · middleware · dto · model
+│   ├── pkg/                     # jwt · session · blacklist · password · email · verification
+│   ├── migrations/
+│   ├── keys/                    # RS256 PEM keys (gitignored in prod)
+│   └── Dockerfile
+├── frontend/                    # React 19 + Vite → Nginx SPA
+│   ├── src/
+│   │   ├── components/          # shared UI components
+│   │   ├── features/            # domain hooks (cart, orders, products, payment, auth)
+│   │   ├── pages/               # route-level page components
+│   │   ├── store/               # Zustand auth store
+│   │   ├── lib/                 # axios instance with JWT interceptor
+│   │   └── types/
+│   ├── tests/e2e/               # Playwright end-to-end tests
+│   └── Dockerfile
+├── nginx/
+│   └── nginx.conf               # reverse proxy, rate limiting, CORS, security headers
+├── api/
+│   └── openapi.yaml             # full REST API contract
+├── script/
+│   ├── init-databases.sql       # all 5 DB schemas, auto-applied on startup
+│   ├── sample_users.sql         # seed: admin / customer / seller (pre-verified)
+│   ├── e2e-test.sh              # 14-assertion browse → cart → order test
+│   ├── e2e-payment.sh           # 12-assertion Kafka saga test
+│   ├── loadtest-orders.sh       # 100 concurrent orders race test
+│   └── k6/                      # k6 load test scripts per scenario
+├── docs/
+│   ├── adrs/                    # architecture decision records
+│   ├── planning/                # development and migration plans
+│   ├── technical/               # deep-dive technical docs with diagrams
+│   └── testing/                 # test plans and phase results
+├── docker-compose.yml
+├── Makefile
+└── .env.example
+```
+
 ## Common Commands
 
 ```bash
